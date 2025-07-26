@@ -667,9 +667,28 @@ __get_manifest_header() {
 }
 
 
+#-------------------------------------------------------------------------------
+# @__remove_symlink
+#-------------------------------------------------------------------------------
+__remove_symlink() {
+    local link_path="$1";
+
+    if [[ -L "$link_path" ]]; then
+        rm "$link_path";
+        if [[ $? -ne 0 ]]; then
+            stderr "Error: Failed to remove symlink: $link_path";
+            return 1;
+        fi;
+    else
+        # It's not an error if the link is already gone.
+        stderr "Notice: Symlink not found at $link_path, nothing to remove.";
+    fi;
+
+    return 0;
+}
 
 
-# implement __remove_symlink | Input: link_path. Atomically removes the specified symlink.
+
 # implement __remove_file | Input: file_path. Atomically removes the specified file.
 # implement __remove_row_from_manifest | Input: pkg_name. Uses sed to delete the line from the manifest.
 
@@ -728,20 +747,66 @@ do_install() {
     return 0;
 }
 
-################################################################################
-#  do_disable <pkg_name>
-################################################################################
-function do_disable() {
-    # Calls: __remove_symlink, _update_manifest_field
-    noop;
+#-------------------------------------------------------------------------------
+# @do_disable
+#-------------------------------------------------------------------------------
+do_disable() {
+    local pkg_name="$1";
+    if [[ -z "$pkg_name" ]]; then
+        stderr "Error: disable command requires a package name.";
+        usage;
+        return 1;
+    fi;
+
+    local status;
+    status=$(_get_manifest_field "$pkg_name" "status");
+    if [[ "$status" != "INSTALLED" ]]; then
+        stderr "Error: Package '$pkg_name' is not in INSTALLED state (current: $status).";
+        return 1;
+    fi;
+
+    local alias;
+    alias=$(_get_manifest_field "$pkg_name" "alias");
+    local link_path="${TARGET_BIN_DIR}/${TARGET_NAMESPACE}/${alias}";
+
+    if ! __remove_symlink "$link_path"; then
+        return 1;
+    fi;
+    
+    _update_manifest_field "$pkg_name" "status" "DISABLED";
+    
+    stderr "Package '$pkg_name' has been disabled.";
+    do_status "$pkg_name";
+    return 0;
 }
 
-################################################################################
-#  do_enable <pkg_name>
-################################################################################
-function do_enable() {
-    # Calls: _link_package
-    noop;
+#-------------------------------------------------------------------------------
+# @do_enable
+#-------------------------------------------------------------------------------
+do_enable() {
+    local pkg_name="$1";
+    if [[ -z "$pkg_name" ]]; then
+        stderr "Error: enable command requires a package name.";
+        usage;
+        return 1;
+    fi;
+
+    local status;
+    status=$(_get_manifest_field "$pkg_name" "status");
+    if [[ "$status" != "DISABLED" ]]; then
+        stderr "Error: Package '$pkg_name' is not in DISABLED state (current: $status).";
+        return 1;
+    fi;
+    
+    # Re-use the existing link helper; it sets status to INSTALLED.
+    if ! _link_package "$pkg_name"; then
+        stderr "Error: Failed to re-link package.";
+        return 1;
+    fi;
+
+    stderr "Package '$pkg_name' has been enabled.";
+    do_status "$pkg_name";
+    return 0;
 }
 
 ################################################################################
