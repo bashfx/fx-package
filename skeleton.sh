@@ -1,0 +1,701 @@
+#!/usr/bin/env bash
+#
+# ----- packagex SKELETON_SENTINEL | lines: 329 | functions: 21 | readonly_vars: 10 | option_vars: 8 ----- #
+#
+# packagex: A utility to manage local bash scripts.
+#
+
+# --- META & PORTABLE ---
+#
+# meta:
+#   version: v0.1.0
+#   author: BashFX
+#
+# portable:
+#   sha256sum
+# builtins:
+#   printf, echo, readonly, local, case, while, shift, declare, awk, grep, sed, sort
+
+# --- CONFIGURATION ---
+
+# These variables define the core paths and settings.
+readonly APP_NAME="packagex";
+readonly ALIAS_NAME="pkgx";
+readonly SRC_TREE=""; # IMPORTANT: User must set this path.
+readonly TARGET_BASE_DIR="${HOME}/.my";
+readonly TARGET_NAMESPACE="tmp";
+readonly TARGET_LIB_DIR="${TARGET_BASE_DIR}/lib";
+readonly TARGET_BIN_DIR="${TARGET_BASE_DIR}/bin";
+readonly MANIFEST_PATH="${HOME}/.pkg_manifest";
+readonly BACKUP_DIR="${SRC_TREE}/.orig";
+readonly BUILD_START_NUMBER=1000;
+
+# These variables hold the state of command-line options.
+opt_debug=0;
+opt_trace=0;
+opt_quiet=0;
+opt_force=0;
+opt_yes=0;
+opt_dev=0;
+QUIET_MODE=0; # Master quiet mode toggle
+DEV_MODE=0;   # Master dev mode toggle
+
+
+# --- HELPERS ---
+
+################################################################################
+#
+#  stderr
+#
+#  Prints messages to the standard error stream. Obeys QUIET_MODE.
+#
+################################################################################
+function stderr() {
+    if [[ "$QUIET_MODE" -eq 1 ]]; then
+        return 0;
+    fi;
+    printf "%s\n" "$*" >&2;
+}
+
+################################################################################
+#
+#  noop
+#
+#  A no-operation function to use as a placeholder in stubs.
+#
+################################################################################
+function noop() {
+    :; # This function intentionally does nothing.
+}
+
+
+# --- DEV HELPERS ---
+
+################################################################################
+#
+#  __low_inspect
+#
+#  Lists declared functions, optionally filtered by prefix.
+#
+################################################################################
+__low_inspect(){
+	local pattern="^(${1:-do_})"; # def to do
+	if [[ $# -gt 1 ]]; then
+		pattern="^($1"
+		shift
+		for p in "$@"; do
+			pattern+="|$p"
+		done
+		pattern+=")"
+	fi
+
+	declare -F \
+		| awk '{print $3}' \
+		| grep -E "$pattern" \
+		| sed 's/^/ /' \
+		| sort;
+}
+
+################################################################################
+#
+#  dev_dispatch
+#
+#  A pre-dispatcher for developer-mode direct function calls.
+#
+################################################################################
+function dev_dispatch() {
+    # This dispatcher only activates if the first argument is '$'
+    if [[ "$1" != '$' ]]; then
+        return 1;
+    fi;
+    shift; # Consume '$'
+
+    local func_to_call="$1";
+    if [[ -z "$func_to_call" ]]; then
+        stderr "Dev Dispatcher: No function specified after '\$'."
+        exit 1;
+    fi;
+    shift; # Consume function name
+
+    # Special case: 'func' command lists available functions
+    if [[ "$func_to_call" == "func" ]]; then
+        stderr "Available functions:";
+        __low_inspect _ __ do_;
+        exit 0;
+    fi;
+
+    # Check if the requested function exists
+    if [[ $(type -t "$func_to_call") == "function" ]]; then
+        stderr "--- DEV CALL: $func_to_call $* ---";
+        "$func_to_call" "$@";
+        local ret=$?;
+        stderr "--- END DEV CALL (Exit: $ret) ---";
+        exit "$ret";
+    else
+        stderr "Error: Function '$func_to_call' not found.";
+        stderr "Available functions:";
+        __low_inspect _ __ do_;
+        exit 1;
+    fi;
+}
+
+
+# ------------------------------------------------------------------------------
+#  Implementation Stubs (from PRD Technical Breakdown)
+# ------------------------------------------------------------------------------
+
+# --- Mid-Level Helpers ---
+
+#-------------------------------------------------------------------------------
+# @_resolve_pkg_prefix
+#-------------------------------------------------------------------------------
+_resolve_pkg_prefix() {
+    local pkg_dir_name="$1";
+    
+    # As per PRD, 'utils' directory maps to 'util' prefix.
+    case "$pkg_dir_name" in
+        (utils)
+            printf "%s" "util";
+            ;;
+        (*)
+            printf "%s" "$pkg_dir_name";
+            ;;
+    esac
+    return 0;
+}
+
+#-------------------------------------------------------------------------------
+# @_get_field_index
+#-------------------------------------------------------------------------------
+_get_field_index() {
+    local field_name="$1";
+    local header;
+    local ret=1;
+    local res="";
+
+    header=$(__get_manifest_header);
+    if [[ -z "$header" ]]; then
+        stderr "Error: Could not read manifest header.";
+        return 1;
+    fi;
+
+    # Use awk to find the column number of the field name
+    res=$(printf "%s" "$header" | awk -v field="$field_name" '
+        BEGIN { RS="\t"; }
+        { if ($0 == field) { print NR; exit; } }
+    ');
+
+    if [[ -n "$res" ]]; then
+        ret=0;
+    fi;
+
+    printf "%s" "$res";
+    return "$ret";
+}
+
+#-------------------------------------------------------------------------------
+# @_get_manifest_row
+#-------------------------------------------------------------------------------
+_get_manifest_row() {
+    local pkg_name="$1";
+    local ret=1;
+    local res="";
+
+    # Ensure the global manifest data is loaded
+    __read_manifest_file;
+
+    # Grep for the package name at the beginning of a line
+    res=$(printf "%s\n" "${MANIFEST_DATA[@]}" | grep -E "^${pkg_name}\t");
+
+    if [[ -n "$res" ]]; then
+        ret=0;
+    fi;
+
+    printf "%s" "$res";
+    return "$ret";
+}
+
+#-------------------------------------------------------------------------------
+# @_get_manifest_field
+#-------------------------------------------------------------------------------
+_get_manifest_field() {
+    local pkg_name="$1";
+    local field_name="$2";
+    local ret=1;
+    local res="";
+    local row;
+    local index;
+
+    row=$(_get_manifest_row "$pkg_name");
+    if [[ -z "$row" ]]; then
+        # This is not an error; the package may not be registered yet.
+        return 1;
+    fi;
+
+    index=$(_get_field_index "$field_name");
+    if [[ -z "$index" ]]; then
+        stderr "Error: Field '$field_name' not found in manifest header.";
+        return 1;
+    fi;
+
+    # Use awk to extract the field by its index
+    res=$(printf "%s" "$row" | awk -v idx="$index" -F'\t' '{print $idx}');
+
+    if [[ -n "$res" ]]; then
+        ret=0;
+    fi;
+
+    printf "%s" "$res";
+    return "$ret";
+}
+
+#-------------------------------------------------------------------------------
+# @_get_source_path
+#-------------------------------------------------------------------------------
+_get_source_path() {
+    local pkg_name="$1";
+    local ret=1;
+    local res="";
+    local prefix;
+    local script_name;
+
+    # The prefix is the part before the first '.'
+    prefix=$(printf "%s" "$pkg_name" | awk -F'.' '{print $1}');
+    # The script name is the part after the first '.'
+    script_name=$(printf "%s" "$pkg_name" | awk -F'.' '{print $2}');
+
+    if [[ -z "$prefix" || -z "$script_name" ]]; then
+        stderr "Error: Invalid package name format: '$pkg_name'. Expected 'prefix.name'.";
+        return 1;
+    fi;
+    
+    # Resolve 'util' to 'utils' for the directory name
+    if [[ "$prefix" == "util" ]]; then
+        prefix="utils";
+    fi;
+
+    res="${SRC_TREE}/pkgs/${prefix}/${script_name}.sh";
+
+    if [[ -f "$res" ]]; then
+        ret=0;
+    fi;
+
+    printf "%s" "$res";
+    return "$ret";
+}
+
+# implement _check_git_status | Input: file_path. Checks if the file is tracked and has uncommitted changes.
+# implement _gather_package_meta | Input: pkg_name. Collects all data needed for a new manifest row.
+# implement _build_manifest_row | Input: (all metadata fields). Output: A single, formatted manifest row string.
+# implement _update_manifest_field | Input: pkg_name, field_name, new_value. Action: Replaces a value in the manifest.
+# implement _load_package | Input: pkg_name. Orchestrates copying the file to the lib dir and updating status.
+# implement _link_package | Input: pkg_name. Orchestrates creating the symlink and updating status.
+# implement _uninstall_package | Input: pkg_name. Orchestrates artifact removal and status updates.
+# implement _confirm_action | Input: prompt_string. A generic helper that prompts the user for [y/N] confirmation.
+
+# --- Low-Level Helpers ---
+# implement __read_manifest_file | Input: (none). Output: Writes manifest content to a global array.
+# implement __get_manifest_header | Input: (none). Output: The first line of the manifest.
+
+
+__get_file_checksum() {
+    local path="$1";
+    local ret=1;
+    local res="";
+
+    if [[ ! -r "$path" ]]; then
+        stderr "Error: File not found or not readable: $path";
+        return 1;
+    fi;
+
+    res=$(sha256sum "$path" 2>/dev/null | awk '{print $1}');
+    if [[ -n "$res" ]]; then
+        ret=0;
+    fi;
+
+    printf "%s" "$res";
+    return "$ret";
+}
+
+
+
+#-------------------------------------------------------------------------------
+# @__get_header_meta
+#-------------------------------------------------------------------------------
+__get_header_meta() {
+    local path="$1";
+    local key="$2";
+    local ret=1;
+    local res="";
+
+    if [[ ! -r "$path" ]]; then
+        stderr "Error: File not found or not readable: $path";
+        return 1;
+    fi;
+
+    # Grep for the key in comments, get the first match, then extract the value.
+    res=$(grep -E "^#\s*${key}:" "$path" | head -n 1 | awk -F': ' '{print $2}');
+
+    if [[ -n "$res" ]]; then
+        ret=0;
+    fi;
+
+    printf "%s" "$res";
+    return "$ret";
+}
+
+#-------------------------------------------------------------------------------
+# @__read_manifest_file
+#-------------------------------------------------------------------------------
+__read_manifest_file() {
+    # This function populates the global MANIFEST_DATA array.
+    # It's memoized; it only reads the file once per script execution.
+    if [[ ${#MANIFEST_DATA[@]} -gt 0 ]]; then
+        return 0;
+    fi;
+
+    if [[ ! -r "$MANIFEST_PATH" ]]; then
+        # It's not an error for the manifest to not exist yet.
+        return 1;
+    fi;
+
+    # Read the file line by line into the global array.
+    mapfile -t MANIFEST_DATA < "$MANIFEST_PATH";
+    return 0;
+}
+
+#-------------------------------------------------------------------------------
+# @__get_manifest_header
+#-------------------------------------------------------------------------------
+__get_manifest_header() {
+    # This function returns the header line of the manifest.
+    # It's memoized; it only reads the file once.
+    if [[ -n "$MANIFEST_HEADER" ]]; then
+        printf "%s" "$MANIFEST_HEADER";
+        return 0;
+    fi;
+
+    if [[ ! -r "$MANIFEST_PATH" ]]; then
+        return 1;
+    fi;
+
+    # Read the first line and cache it in a global variable.
+    read -r MANIFEST_HEADER < "$MANIFEST_PATH";
+    printf "%s" "$MANIFEST_HEADER";
+    return 0;
+}
+
+
+
+# implement __backup_file | Input: file_path. Copies the file to $BACKUP_DIR.
+# implement __inject_header | Input: file_path. Uses sed to insert the normalized header block.
+# implement __add_row_to_manifest | Input: row_string. Appends the formatted string to the manifest.
+# implement __copy_file | Input: src_path, dest_path. Copies the file.
+# implement __create_symlink | Input: src_path, link_path. Creates the symlink.
+# implement __remove_symlink | Input: link_path. Atomically removes the specified symlink.
+# implement __remove_file | Input: file_path. Atomically removes the specified file.
+# implement __remove_row_from_manifest | Input: pkg_name. Uses sed to delete the line from the manifest.
+
+
+# --- API FUNCTIONS ---
+
+################################################################################
+#  do_install <pkg_name>
+################################################################################
+function do_install() {
+    # Calls: _load_package, _link_package
+    noop;
+}
+
+################################################################################
+#  do_disable <pkg_name>
+################################################################################
+function do_disable() {
+    # Calls: __remove_symlink, _update_manifest_field
+    noop;
+}
+
+################################################################################
+#  do_enable <pkg_name>
+################################################################################
+function do_enable() {
+    # Calls: _link_package
+    noop;
+}
+
+################################################################################
+#  do_uninstall <pkg_name>
+################################################################################
+function do_uninstall() {
+    # Calls: _uninstall_package
+    noop;
+}
+
+################################################################################
+#  do_restore <pkg_name>
+################################################################################
+function do_restore() {
+    # Calls: _load_package, _link_package
+    noop;
+}
+
+################################################################################
+#  do_clean <pkg_name>
+################################################################################
+function do_clean() {
+    # Calls: _confirm_action, __remove_row_from_manifest
+    noop;
+}
+
+#-------------------------------------------------------------------------------
+# @do_status
+#-------------------------------------------------------------------------------
+do_status() {
+    local pkg_target="$1";
+    local ret=1;
+
+    if [[ -z "$pkg_target" ]]; then
+        stderr "Error: status command requires a package name or 'all'.";
+        usage;
+        return 1;
+    fi;
+
+    # Ensure manifest data is loaded into memory
+    __read_manifest_file;
+    if [[ $? -ne 0 ]]; then
+        stderr "Notice: Manifest file not found or is empty.";
+        return 1;
+    fi;
+
+    local header;
+    header=$(__get_manifest_header);
+    printf "%s\n" "$header";
+
+    if [[ "$pkg_target" == "all" ]]; then
+        # Print all rows except the header
+        printf "%s\n" "${MANIFEST_DATA[@]}" | tail -n +2;
+        ret=0;
+    else
+        local row;
+        row=$(_get_manifest_row "$pkg_target");
+        if [[ -n "$row" ]]; then
+            printf "%s\n" "$row";
+            ret=0;
+        else
+            stderr "Error: Package '$pkg_target' not found in manifest.";
+        fi;
+    fi;
+
+    return "$ret";
+}
+
+#-------------------------------------------------------------------------------
+# @do_meta
+#-------------------------------------------------------------------------------
+do_meta() {
+    local pkg_name="$1";
+    local ret=1;
+    local src_path;
+
+    if [[ -z "$pkg_name" ]]; then
+        stderr "Error: meta command requires a package name.";
+        usage;
+        return 1;
+    fi;
+
+    src_path=$(_get_source_path "$pkg_name");
+    if [[ ! -r "$src_path" ]]; then
+        stderr "Error: Source file for '$pkg_name' not found at: $src_path";
+        return 1;
+    fi;
+
+    # Find all '# key: value' pairs in the file and format them.
+    grep -E "^#\s*[a-zA-Z0-9_]+:" "$src_path" \
+        | sed -e 's/^#\s*//' -e 's/:\s*/: /';
+
+    # Check if grep found anything
+    if [[ ${PIPESTATUS[0]} -eq 0 ]]; then
+        ret=0;
+    fi;
+    
+    return "$ret";
+}
+
+################################################################################
+#  do_normalize <pkg_name>
+################################################################################
+function do_normalize() {
+    # Calls: _check_git_status, __backup_file, __inject_header
+    noop;
+}
+
+################################################################################
+#  do_register <pkg_name>
+################################################################################
+function do_register() {
+    # Calls: _gather_package_meta, _build_manifest_row, __add_row_to_manifest
+    noop;
+}
+
+################################################################################
+#  do_update <pkg_name>
+################################################################################
+function do_update() {
+    # Calls: (TBD, likely checksum comparison and copy logic)
+    noop;
+}
+
+################################################################################
+#  do_checksum <pkg_name>
+################################################################################
+function do_checksum() {
+    # Calls: (TBD, likely checksum comparison logic)
+    noop;
+}
+
+################################################################################
+#
+#  driver
+#
+#  A dedicated function for simple, ad-hoc tests. Not for production.
+#
+################################################################################
+function driver() {
+    stderr "--- RUNNING DRIVER ---";
+    # Add simple test calls here
+    noop;
+    stderr "--- DRIVER FINISHED ---";
+}
+
+
+# --- CORE FUNCTIONS ---
+
+################################################################################
+#
+#  usage
+#
+#  Displays the help text for the script.
+#
+################################################################################
+function usage() {
+    printf "Usage: %s <command> [options] [arguments]\n" "$APP_NAME";
+    printf "\n";
+    printf "  A utility to manage local bash scripts.\n";
+    printf "\n";
+    printf "Commands:\n";
+    printf "  install <pkg>     Install a package.\n";
+    printf "  uninstall <pkg>   Uninstall a package.\n";
+    printf "  enable <pkg>      Enable a disabled package (relinks).\n";
+    printf "  disable <pkg>     Disable an installed package (unlinks).\n";
+    printf "  status <pkg|all>  Check the status of package(s).\n";
+    printf "  meta <pkg>        Read a script's header metadata.\n";
+    printf "  normalize <pkg>   Inject standard header into a source script.\n";
+    printf "  register <pkg>    Add/update a package's entry in the manifest.\n";
+    printf "  restore <pkg>     Re-install a package marked as REMOVED.\n";
+    printf "  clean <pkg>       Purge a REMOVED package from the manifest.\n";
+    printf "  update <pkg>      Propagate changes from source to installed.\n";
+    printf "  checksum <pkg>    Compare source and installed file checksums.\n";
+    printf "\n";
+    return 0;
+}
+
+
+#-------------------------------------------------------------------------------
+# @options
+#-------------------------------------------------------------------------------
+options() {
+    # Set option defaults
+    opt_debug=0;
+    opt_trace=0;
+    opt_quiet=0;
+    opt_force=0;
+    opt_yes=0;
+    opt_dev=0;
+
+    while getopts ":dtqfyD" opt; do
+        case $opt in
+            (d) opt_debug=1;;
+            (t) opt_trace=1; opt_debug=1;; # Trace implies debug
+            (q) QUIET_MODE=1; opt_quiet=1;;
+            (f) opt_force=1;;
+            (y) opt_yes=1;;
+            (D) DEV_MODE=1; opt_dev=1; opt_debug=1; opt_trace=1;; # Dev implies all verbosity
+            \?)
+                stderr "Error: Invalid option: -$OPTARG" >&2;
+                usage;
+                return 1;
+                ;;
+        esac
+    done;
+
+    # Shift away the parsed options
+    shift $((OPTIND - 1));
+    return 0;
+}
+
+################################################################################
+#
+#  dispatch
+#
+#  Routes commands to the appropriate 'do_*' functions.
+#
+################################################################################
+function dispatch() {
+    local cmd="$1";
+    if [[ -z "$cmd" ]]; then
+        usage;
+        return 1;
+    fi;
+    shift;
+
+    case "$cmd" in
+        (install)     do_install "$@";;
+        (uninstall)   do_uninstall "$@";;
+        (enable)      do_enable "$@";;
+        (disable)     do_disable "$@";;
+        (status)      do_status "$@";;
+        (meta)        do_meta "$@";;
+        (normalize)   do_normalize "$@";;
+        (register)    do_register "$@";;
+        (restore)     do_restore "$@";;
+        (clean)       do_clean "$@";;
+        (update)      do_update "$@";;
+        (checksum)    do_checksum "$@";;
+        (driver)      driver "$@";; # Internal test driver
+        (*)
+            printf "Error: Unknown command '%s'\n\n" "$cmd";
+            usage;
+            return 1;
+            ;;
+    esac;
+}
+
+
+################################################################################
+#
+#  main
+#
+#  The main entrypoint for the script.
+#
+################################################################################
+function main() {
+    # First, parse all command-line options.
+    options "$@";
+
+    # If in DEV_MODE, attempt to use the dev dispatcher first.
+    # The dev_dispatch function will exit the script if it successfully
+    # handles the command (i.e., if the first arg is '$').
+    if [[ "$DEV_MODE" -eq 1 ]]; then
+        dev_dispatch "$@";
+    fi;
+
+    # If not in dev mode, or if the dev dispatcher didn't activate,
+    # proceed with the normal command dispatch.
+    local cmd_and_args=("$@");
+    dispatch "${cmd_and_args[@]}";
+}
+
+
+# --- MAIN INVOCATION ---
+
+main "$@";
