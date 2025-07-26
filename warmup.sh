@@ -1,33 +1,21 @@
 #!/usr/bin/env bash
 #
-# warmup.sh - A sequence of commands to manually test packagex functionality.
+# warmup.sh - v2 - A manual command guide for the Workspace Paradigm.
 #
-# This script demonstrates the two primary workflows:
-#  1. Normalizing and installing a new package.
-#  2. Caching and then fully registering a package with custom metadata.
+# This script demonstrates the two primary workflows for packagex v2.
 #
 
 #===============================================================================
 #  STEP 0: PREREQUISITES (MANDATORY)
 #-------------------------------------------------------------------------------
-# 1. Edit the './packagex' script and set the 'SRC_TREE' variable to the
-#    absolute path of your source code repository (e.g., /path/to/fx-catalog).
-#
-# 2. To ensure a clean test, remove any previous manifest file:
-#    rm -f ~/.pkg_manifest
-#
-# 3. This test uses 'fx.semver' and a dummy 'util.logger'. Ensure the semver
-#    file has NO metadata header to begin with. You can create the dummy
-#    logger package with the following commands:
-#
-#    # In your SRC_TREE directory...
-#    mkdir -p pkgs/utils/logger
-#    printf "#!/usr/bin/env bash\n#\n# --- META ---\n#\n# meta:\n#   author: CustomUser\n#   my_custom_field: some_value\n#\n\necho 'Logger v1'\n" > pkgs/utils/logger/logger.sh
+# 1. Manually edit './packagex.sh' and set the 'SRC_TREE' variable.
+# 2. To ensure a clean test, run:
+#    rm -f ~/.pkg_manifest && rm -rf /path/to/your/src_tree/.work
 #===============================================================================
 
 
 # --- SETUP ---
-alias pkgx='./packagex'
+alias pkgx='./packagex.sh'
 echo "Test alias 'pkgx' is set. Starting test sequence..."
 
 
@@ -36,80 +24,55 @@ echo "Test alias 'pkgx' is set. Starting test sequence..."
 #===============================================================================
 echo "### Starting Scenario 1: Standard Lifecycle ###"
 
-# --- 1.1 Normalize and Register ---
-# Normalize the script. This is the NEW first step for a raw script.
-# It adds the minimal metadata header.
-pkgx normalize fx.semver
-
-# Verify we can now read the default metadata.
-pkgx meta fx.semver
-
-# Register the package. This will read the header, calculate derived data,
-# update the manifest, and ENRICH the header in the source file.
+# --- 1.1 Registration (The NEW First Step) ---
+# This command now creates the .work/ directory and prepares the files.
 pkgx register fx.semver
 
-# Check the status. Should show as KNOWN or INCOMPLETE.
-pkgx status fx.semver
-pkgx status all # View the whole manifest
+# Verify the outcome in the workspace.
+ls -l /path/to/your/src_tree/.work/
+# You should see: fx.semver.orig.sh and fx.semver.pkg.sh
 
-# --- 1.2 Installation Lifecycle ---
-# Install the package.
+# Verify that the working copy header was enriched.
+pkgx meta fx.semver
+
+# --- 1.2 Installation ---
 pkgx install fx.semver
 
-# Verify the outcome.
-ls -l ~/.my/lib/tmp/semver.sh   # Check that the library file exists.
-ls -l ~/.my/bin/tmp/semver      # Check that the symlink exists.
-pkgx status fx.semver           # Status should now be INSTALLED.
+# Verify the final installation. Note the new filename.
+ls -l ~/.my/lib/tmp/fx.semver.sh
+ls -l ~/.my/bin/tmp/semver
 
-# --- 1.3 Disable / Enable Cycle ---
-pkgx disable fx.semver
-ls -l ~/.my/bin/tmp/semver      # Should fail (file not found).
-pkgx status fx.semver           # Should be DISABLED.
+# --- 1.3 Update Cycle (CRITICAL NEW WORKFLOW) ---
+# Simulate a developer making a change to the *pristine* source file.
+echo "# A new comment" >> /path/to/your/src_tree/pkgs/fx/semver/semver.sh
 
-pkgx enable fx.semver
-ls -l ~/.my/bin/tmp/semver      # Should exist again.
-pkgx status fx.semver           # Should be INSTALLED.
+# Run the new 'update' command. It will detect the change and refresh the workspace.
+pkgx update fx.semver
 
-# --- 1.4 Uninstall / Restore / Clean Cycle ---
+# The workspace is updated, but the installed version is still the old one.
+# You must now re-install to deploy the changes.
+pkgx install -f fx.semver
+
+# --- 1.4 Cleanup ---
+# The rest of the lifecycle (disable, enable, uninstall, clean) remains the same.
 pkgx uninstall fx.semver
-ls -l ~/.my/lib/tmp/semver.sh   # Should fail.
-pkgx status fx.semver           # Should be REMOVED.
-
-pkgx restore fx.semver
-ls -l ~/.my/lib/tmp/semver.sh   # Should exist again.
-pkgx status fx.semver           # Should be INSTALLED.
-
-pkgx uninstall fx.semver        # Uninstall again to prepare for cleaning.
 pkgx clean fx.semver
-pkgx status fx.semver           # Should fail (package not in manifest).
+
+# Manually revert the change to the pristine source file.
+# git checkout /path/to/your/src_tree/pkgs/fx/semver/semver.sh
 
 
 #===============================================================================
-#  SCENARIO 2: Caching & Preservation for a script with EXISTING custom meta
+#  SCENARIO 2: Caching & Preservation
 #===============================================================================
 echo -e "\n### Starting Scenario 2: Caching & Preservation ###"
 
-# --- 2.1 Cache and Verify ---
-# First, view the initial metadata, including our custom field.
-pkgx meta util.logger
-
-# Use the NEW 'cache' command to create a partial entry in the manifest.
+# The workflow for caching remains the same, but it now operates on the workspace.
 pkgx cache util.logger
-
-# The status should be INCOMPLETE, and the manifest should only have header data.
 pkgx status util.logger
-
-# --- 2.2 Register and Verify Preservation ---
-# Now, perform a full registration.
 pkgx register util.logger
-
-# CRITICAL VERIFICATION: Check the header again. The 'my_custom_field'
-# MUST have been preserved, and the other fields should now be enriched.
 pkgx meta util.logger
-
-# The manifest should now show a complete, 'KNOWN' record.
-pkgx status util.logger
 
 
 # --- FINAL ---
-echo -e "\n### Warmup script complete. ###"
+echo -e "\n### Warmup guide complete. ###"

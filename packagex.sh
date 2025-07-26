@@ -20,7 +20,7 @@
 
 readonly APP_NAME="packagex";
 readonly ALIAS_NAME="pkgx";
-readonly SRC_TREE=""; # IMPORTANT: User must set this path.
+readonly SRC_TREE="/home/nulltron/.repos/bashfx/fx-catalog";
 readonly WORK_DIR="${SRC_TREE}/.work"; # The managed workspace for packagex.
 readonly TARGET_BASE_DIR="${HOME}/.my";
 readonly TARGET_NAMESPACE="tmp";
