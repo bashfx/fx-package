@@ -12,7 +12,7 @@
 #   author: BashFX
 #
 # portable:
-#   sha256sum
+#   (none yet)
 # builtins:
 #   printf, echo, readonly, local, case, while, shift, declare, awk, grep, sed, sort
 
@@ -145,145 +145,11 @@ function dev_dispatch() {
 # ------------------------------------------------------------------------------
 
 # --- Mid-Level Helpers ---
-
-#-------------------------------------------------------------------------------
-# @_resolve_pkg_prefix
-#-------------------------------------------------------------------------------
-_resolve_pkg_prefix() {
-    local pkg_dir_name="$1";
-    
-    # As per PRD, 'utils' directory maps to 'util' prefix.
-    case "$pkg_dir_name" in
-        (utils)
-            printf "%s" "util";
-            ;;
-        (*)
-            printf "%s" "$pkg_dir_name";
-            ;;
-    esac
-    return 0;
-}
-
-#-------------------------------------------------------------------------------
-# @_get_field_index
-#-------------------------------------------------------------------------------
-_get_field_index() {
-    local field_name="$1";
-    local header;
-    local ret=1;
-    local res="";
-
-    header=$(__get_manifest_header);
-    if [[ -z "$header" ]]; then
-        stderr "Error: Could not read manifest header.";
-        return 1;
-    fi;
-
-    # Use awk to find the column number of the field name
-    res=$(printf "%s" "$header" | awk -v field="$field_name" '
-        BEGIN { RS="\t"; }
-        { if ($0 == field) { print NR; exit; } }
-    ');
-
-    if [[ -n "$res" ]]; then
-        ret=0;
-    fi;
-
-    printf "%s" "$res";
-    return "$ret";
-}
-
-#-------------------------------------------------------------------------------
-# @_get_manifest_row
-#-------------------------------------------------------------------------------
-_get_manifest_row() {
-    local pkg_name="$1";
-    local ret=1;
-    local res="";
-
-    # Ensure the global manifest data is loaded
-    __read_manifest_file;
-
-    # Grep for the package name at the beginning of a line
-    res=$(printf "%s\n" "${MANIFEST_DATA[@]}" | grep -E "^${pkg_name}\t");
-
-    if [[ -n "$res" ]]; then
-        ret=0;
-    fi;
-
-    printf "%s" "$res";
-    return "$ret";
-}
-
-#-------------------------------------------------------------------------------
-# @_get_manifest_field
-#-------------------------------------------------------------------------------
-_get_manifest_field() {
-    local pkg_name="$1";
-    local field_name="$2";
-    local ret=1;
-    local res="";
-    local row;
-    local index;
-
-    row=$(_get_manifest_row "$pkg_name");
-    if [[ -z "$row" ]]; then
-        # This is not an error; the package may not be registered yet.
-        return 1;
-    fi;
-
-    index=$(_get_field_index "$field_name");
-    if [[ -z "$index" ]]; then
-        stderr "Error: Field '$field_name' not found in manifest header.";
-        return 1;
-    fi;
-
-    # Use awk to extract the field by its index
-    res=$(printf "%s" "$row" | awk -v idx="$index" -F'\t' '{print $idx}');
-
-    if [[ -n "$res" ]]; then
-        ret=0;
-    fi;
-
-    printf "%s" "$res";
-    return "$ret";
-}
-
-#-------------------------------------------------------------------------------
-# @_get_source_path
-#-------------------------------------------------------------------------------
-_get_source_path() {
-    local pkg_name="$1";
-    local ret=1;
-    local res="";
-    local prefix;
-    local script_name;
-
-    # The prefix is the part before the first '.'
-    prefix=$(printf "%s" "$pkg_name" | awk -F'.' '{print $1}');
-    # The script name is the part after the first '.'
-    script_name=$(printf "%s" "$pkg_name" | awk -F'.' '{print $2}');
-
-    if [[ -z "$prefix" || -z "$script_name" ]]; then
-        stderr "Error: Invalid package name format: '$pkg_name'. Expected 'prefix.name'.";
-        return 1;
-    fi;
-    
-    # Resolve 'util' to 'utils' for the directory name
-    if [[ "$prefix" == "util" ]]; then
-        prefix="utils";
-    fi;
-
-    res="${SRC_TREE}/pkgs/${prefix}/${script_name}.sh";
-
-    if [[ -f "$res" ]]; then
-        ret=0;
-    fi;
-
-    printf "%s" "$res";
-    return "$ret";
-}
-
+# implement _resolve_pkg_prefix | Input: pkg_dir_name. Output: The correct prefix (fx, util).
+# implement _get_manifest_row | Input: pkg_name. Output: The full manifest line for the package.
+# implement _get_field_index | Input: field_name. Output: The numerical index (column number) of a field.
+# implement _get_manifest_field | Input: pkg_name, field_name. Output: The value of a specific field for a package.
+# implement _get_source_path | Input: pkg_name. Output: The absolute path to the source script.
 # implement _check_git_status | Input: file_path. Checks if the file is tracked and has uncommitted changes.
 # implement _gather_package_meta | Input: pkg_name. Collects all data needed for a new manifest row.
 # implement _build_manifest_row | Input: (all metadata fields). Output: A single, formatted manifest row string.
@@ -296,97 +162,8 @@ _get_source_path() {
 # --- Low-Level Helpers ---
 # implement __read_manifest_file | Input: (none). Output: Writes manifest content to a global array.
 # implement __get_manifest_header | Input: (none). Output: The first line of the manifest.
-
-
-__get_file_checksum() {
-    local path="$1";
-    local ret=1;
-    local res="";
-
-    if [[ ! -r "$path" ]]; then
-        stderr "Error: File not found or not readable: $path";
-        return 1;
-    fi;
-
-    res=$(sha256sum "$path" 2>/dev/null | awk '{print $1}');
-    if [[ -n "$res" ]]; then
-        ret=0;
-    fi;
-
-    printf "%s" "$res";
-    return "$ret";
-}
-
-
-
-#-------------------------------------------------------------------------------
-# @__get_header_meta
-#-------------------------------------------------------------------------------
-__get_header_meta() {
-    local path="$1";
-    local key="$2";
-    local ret=1;
-    local res="";
-
-    if [[ ! -r "$path" ]]; then
-        stderr "Error: File not found or not readable: $path";
-        return 1;
-    fi;
-
-    # Grep for the key in comments, get the first match, then extract the value.
-    res=$(grep -E "^#\s*${key}:" "$path" | head -n 1 | awk -F': ' '{print $2}');
-
-    if [[ -n "$res" ]]; then
-        ret=0;
-    fi;
-
-    printf "%s" "$res";
-    return "$ret";
-}
-
-#-------------------------------------------------------------------------------
-# @__read_manifest_file
-#-------------------------------------------------------------------------------
-__read_manifest_file() {
-    # This function populates the global MANIFEST_DATA array.
-    # It's memoized; it only reads the file once per script execution.
-    if [[ ${#MANIFEST_DATA[@]} -gt 0 ]]; then
-        return 0;
-    fi;
-
-    if [[ ! -r "$MANIFEST_PATH" ]]; then
-        # It's not an error for the manifest to not exist yet.
-        return 1;
-    fi;
-
-    # Read the file line by line into the global array.
-    mapfile -t MANIFEST_DATA < "$MANIFEST_PATH";
-    return 0;
-}
-
-#-------------------------------------------------------------------------------
-# @__get_manifest_header
-#-------------------------------------------------------------------------------
-__get_manifest_header() {
-    # This function returns the header line of the manifest.
-    # It's memoized; it only reads the file once.
-    if [[ -n "$MANIFEST_HEADER" ]]; then
-        printf "%s" "$MANIFEST_HEADER";
-        return 0;
-    fi;
-
-    if [[ ! -r "$MANIFEST_PATH" ]]; then
-        return 1;
-    fi;
-
-    # Read the first line and cache it in a global variable.
-    read -r MANIFEST_HEADER < "$MANIFEST_PATH";
-    printf "%s" "$MANIFEST_HEADER";
-    return 0;
-}
-
-
-
+# implement __get_file_checksum | Input: file_path. Output: The SHA256 checksum of the file.
+# implement __get_header_meta | Input: file_path, meta_key. Output: The value of a '# key: value' pair.
 # implement __backup_file | Input: file_path. Copies the file to $BACKUP_DIR.
 # implement __inject_header | Input: file_path. Uses sed to insert the normalized header block.
 # implement __add_row_to_manifest | Input: row_string. Appends the formatted string to the manifest.
@@ -447,78 +224,20 @@ function do_clean() {
     noop;
 }
 
-#-------------------------------------------------------------------------------
-# @do_status
-#-------------------------------------------------------------------------------
-do_status() {
-    local pkg_target="$1";
-    local ret=1;
-
-    if [[ -z "$pkg_target" ]]; then
-        stderr "Error: status command requires a package name or 'all'.";
-        usage;
-        return 1;
-    fi;
-
-    # Ensure manifest data is loaded into memory
-    __read_manifest_file;
-    if [[ $? -ne 0 ]]; then
-        stderr "Notice: Manifest file not found or is empty.";
-        return 1;
-    fi;
-
-    local header;
-    header=$(__get_manifest_header);
-    printf "%s\n" "$header";
-
-    if [[ "$pkg_target" == "all" ]]; then
-        # Print all rows except the header
-        printf "%s\n" "${MANIFEST_DATA[@]}" | tail -n +2;
-        ret=0;
-    else
-        local row;
-        row=$(_get_manifest_row "$pkg_target");
-        if [[ -n "$row" ]]; then
-            printf "%s\n" "$row";
-            ret=0;
-        else
-            stderr "Error: Package '$pkg_target' not found in manifest.";
-        fi;
-    fi;
-
-    return "$ret";
+################################################################################
+#  do_status <pkg_name | all>
+################################################################################
+function do_status() {
+    # Calls: _get_manifest_row (or all rows)
+    noop;
 }
 
-#-------------------------------------------------------------------------------
-# @do_meta
-#-------------------------------------------------------------------------------
-do_meta() {
-    local pkg_name="$1";
-    local ret=1;
-    local src_path;
-
-    if [[ -z "$pkg_name" ]]; then
-        stderr "Error: meta command requires a package name.";
-        usage;
-        return 1;
-    fi;
-
-    src_path=$(_get_source_path "$pkg_name");
-    if [[ ! -r "$src_path" ]]; then
-        stderr "Error: Source file for '$pkg_name' not found at: $src_path";
-        return 1;
-    fi;
-
-    # Find all '# key: value' pairs in the file and format them.
-    grep -E "^#\s*[a-zA-Z0-9_]+:" "$src_path" \
-        | sed -e 's/^#\s*//' -e 's/:\s*/: /';
-
-    # Check if grep found anything
-    if [[ ${PIPESTATUS[0]} -eq 0 ]]; then
-        ret=0;
-    fi;
-    
-    return "$ret";
+################################################################################
+#  do_meta <pkg_name>
+################################################################################
+function do_meta() {
+    # Calls: _get_source_path, __get_header_meta
+    noop;
 }
 
 ################################################################################
@@ -600,38 +319,26 @@ function usage() {
 }
 
 
-#-------------------------------------------------------------------------------
-# @options
-#-------------------------------------------------------------------------------
-options() {
-    # Set option defaults
-    opt_debug=0;
-    opt_trace=0;
-    opt_quiet=0;
-    opt_force=0;
-    opt_yes=0;
-    opt_dev=0;
-
+################################################################################
+#
+#  options
+#
+#  Parses command-line flags.
+#
+################################################################################
+function options() {
     while getopts ":dtqfyD" opt; do
         case $opt in
-            (d) opt_debug=1;;
-            (t) opt_trace=1; opt_debug=1;; # Trace implies debug
-            (q) QUIET_MODE=1; opt_quiet=1;;
-            (f) opt_force=1;;
-            (y) opt_yes=1;;
-            (D) DEV_MODE=1; opt_dev=1; opt_debug=1; opt_trace=1;; # Dev implies all verbosity
+            (q) QUIET_MODE=1;;
+            (D) DEV_MODE=1; opt_dev=1;;
             \?)
-                stderr "Error: Invalid option: -$OPTARG" >&2;
-                usage;
-                return 1;
                 ;;
         esac
     done;
-
-    # Shift away the parsed options
     shift $((OPTIND - 1));
     return 0;
 }
+
 
 ################################################################################
 #
