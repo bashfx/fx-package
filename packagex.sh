@@ -1,27 +1,27 @@
 #!/usr/bin/env bash
 #
-# ----- packagex-v2.0.0-final | lines: 1387 | functions: 56 | readonly_vars: 11 | option_vars: 8 ----- #
+# ----- packagex-v2.1-SKELETON_SENTINEL | lines: 309 | functions: 20 | readonly_vars: 10 | option_vars: 7 ----- #
 #
-# packagex: A utility to manage a workspace of local bash scripts.
+# packagex: A utility to manage a non-destructive workspace of local bash scripts.
 #
 
 # --- META & PORTABLE ---
 #
 # meta:
-#   version: v2.0.0
+#   version: v2.1.0
 #   author: BashFX
 #
 # portable:
-#   sha256sum, git, cp, mkdir, ln, rm
+#   git, cp, mkdir, ln, rm, sha256sum
 # builtins:
-#   printf, echo, readonly, local, case, while, shift, declare, awk, grep, sed, sort, mapfile, read
+#   printf, echo, readonly, local, case, while, shift, declare, awk, grep, sed, sort
 
 # --- CONFIGURATION ---
 
 readonly APP_NAME="packagex";
 readonly ALIAS_NAME="pkgx";
-readonly SRC_TREE="/home/nulltron/.repos/bashfx/fx-catalog";
-readonly WORK_DIR="${SRC_TREE}/.work"; # The managed workspace for packagex.
+readonly SRC_TREE=""; # IMPORTANT: User must set this path.
+readonly WORK_DIR="${SRC_TREE}/.work";
 readonly TARGET_BASE_DIR="${HOME}/.my";
 readonly TARGET_NAMESPACE="tmp";
 readonly TARGET_LIB_DIR="${TARGET_BASE_DIR}/lib";
@@ -34,15 +34,15 @@ opt_trace=0;
 opt_quiet=0;
 opt_force=0;
 opt_yes=0;
-opt_dev=0;
 QUIET_MODE=0;
 DEV_MODE=0;
 
 
-# --- SIMPLE HELPERS ---
+# --- HELPERS ---
 
 stderr() { if [[ "$QUIET_MODE" -eq 1 ]]; then return 0; fi; printf "%s\n" "$*" >&2; }
 noop() { :; }
+is_dev() { [[ "$DEV_MODE" -eq 1 ]]; }
 
 
 # --- DEV HELPERS ---
@@ -54,9 +54,7 @@ __low_inspect(){
 }
 
 dev_dispatch() {
-    local func_to_call="$1";
-    if [[ -z "$func_to_call" ]]; then stderr "Dev Dispatcher: No function specified."; exit 1; fi;
-    shift;
+    local func_to_call="$1"; shift;
     if [[ "$func_to_call" == "func" ]]; then stderr "Available functions:"; __low_inspect _ __ do_; exit 0; fi;
     if [[ $(type -t "$func_to_call") == "function" ]]; then
         stderr "--- DEV CALL: $func_to_call $* ---"; "$func_to_call" "$@"; local ret=$?;
@@ -66,454 +64,409 @@ dev_dispatch() {
     fi;
 }
 
+# --- IMPLEMENTATION STUBS (from PRD v2.1) ---
 
-# --- MID-LEVEL HELPERS ---
+#-------------------------------------------------------------------------------
+# @_get_true_source_path
+#-------------------------------------------------------------------------------
+_get_true_source_path() {
+    local pkg_name="$1";
+    local prefix=${pkg_name%%.*};
+    local script_name=${pkg_name#*.};
 
-_build_manifest_row() { local fields=("$@"); local row=""; printf -v row '%s\t' "${fields[@]}"; printf "%s" "${row%?}\t::"; return 0; }
+    if [[ "$pkg_name" == "$prefix" || -z "$script_name" ]]; then
+        stderr "Error: Invalid package name format: '$pkg_name'. Expected 'prefix.name'.";
+        return 1;
+    fi;
+    
+    if [[ "$prefix" == "util" ]]; then
+        prefix="utils";
+    fi;
 
-_check_git_status() {
-    local path="$1";
-    if ! command -v git &> /dev/null; then stderr "Warning: 'git' command not found."; return 0; fi;
-    if ! git -C "$(dirname "$path")" rev-parse --is-inside-work-tree &> /dev/null; then return 0; fi;
-    local status; status=$(git -C "$(dirname "$path")" status --porcelain -- "$path");
-    if [[ -n "$status" ]]; then
-        stderr "Error: Git status for '$path' is not clean. Please commit changes.";
+    printf "%s" "${SRC_TREE}/pkgs/${prefix}/${script_name}/${script_name}.sh";
+    return 0;
+}
+
+#-------------------------------------------------------------------------------
+# @_prepare_workspace_for_pkg
+#-------------------------------------------------------------------------------
+_prepare_workspace_for_pkg() {
+    local pkg_name="$1";
+    local true_source_path;
+    true_source_path=$(_get_true_source_path "$pkg_name");
+    if [[ ! -r "$true_source_path" ]]; then
+        stderr "Error: Pristine source file not found at '$true_source_path'.";
+        return 1;
+    fi;
+
+    if ! __create_workspace_dir "$pkg_name"; then
+        return 1;
+    fi;
+
+    local working_copy_path;
+    working_copy_path=$(_get_workspace_path "$pkg_name" "pkg");
+    if ! __create_working_copy "$true_source_path" "$working_copy_path"; then
+        return 1;
+    fi;
+
+    local pristine_backup_path;
+    pristine_backup_path=$(_get_workspace_path "$pkg_name" "orig");
+    if ! __create_pristine_backup "$true_source_path" "$pristine_backup_path"; then
+        return 1;
+    fi;
+
+    return 0;
+}
+
+#-------------------------------------------------------------------------------
+# @_get_workspace_path
+#-------------------------------------------------------------------------------
+_get_workspace_path() {
+    local pkg_name="$1";
+    local type="$2"; # "pkg" or "orig"
+    local prefix=${pkg_name%%.*};
+    
+    printf "%s" "${WORK_DIR}/${prefix}/${pkg_name}.${type}.sh";
+    return 0;
+}
+
+#-------------------------------------------------------------------------------
+# @__create_workspace_dir
+#-------------------------------------------------------------------------------
+__create_workspace_dir() {
+    local pkg_name="$1";
+    local prefix=${pkg_name%%.*};
+    local dir_path="${WORK_DIR}/${prefix}";
+
+    if [[ ! -d "$dir_path" ]]; then
+        mkdir -p "$dir_path";
+        if [[ $? -ne 0 ]]; then
+            stderr "Error: Failed to create workspace directory: $dir_path";
+            return 1;
+        fi;
+    fi;
+    return 0;
+}
+
+#-------------------------------------------------------------------------------
+# @__create_working_copy
+#-------------------------------------------------------------------------------
+__create_working_copy() {
+    local src_path="$1";
+    local dest_path="$2";
+    cp -p "$src_path" "$dest_path";
+    if [[ $? -ne 0 ]]; then
+        stderr "Error: Failed to create working copy at '$dest_path'.";
         return 1;
     fi;
     return 0;
 }
 
-_confirm_action() {
-    if [[ "$opt_yes" -eq 1 ]]; then return 0; fi;
-    local prompt_string="$1"; local answer; read -r -p "$prompt_string [y/N] " answer;
-    case "$answer" in (y|Y) return 0;; (*) return 1;; esac;
-}
-
-_gather_package_meta() {
-    local pkg_name="$1";
-    # Gathers data from the WORKING copy, not the true source.
-    local working_path; working_path=$(_get_working_path "$pkg_name");
-    local true_path; true_path=$(_get_true_source_path "$pkg_name");
-    if [[ ! -r "$working_path" ]]; then stderr "Error: Working path for '$pkg_name' not found."; return 1; fi;
-    local ver; ver=$(__get_header_meta "$working_path" "version"); [[ -z "$ver" ]] && ver="v0.1.0";
-    local alias; alias=$(__get_header_meta "$working_path" "alias"); [[ -z "$alias" ]] && alias=${pkg_name#*.};
-    local deps; deps=$(__get_header_meta "$working_path" "deps"); [[ -z "$deps" ]] && deps="none";
-    local checksum; checksum=$(__get_file_checksum "$working_path");
-    local status="KNOWN";
-    if [[ "$ver" == "v0.1.0" || "$alias" == "${pkg_name#*.}" ]]; then status="INCOMPLETE"; fi;
-    printf "%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s" \
-        "$pkg_name" "$status" "$ver" "$BUILD_START_NUMBER" "$alias" "$true_path" "$checksum" "$deps";
+#-------------------------------------------------------------------------------
+# @__create_pristine_backup
+#-------------------------------------------------------------------------------
+__create_pristine_backup() {
+    local src_path="$1";
+    local dest_path="$2";
+    cp -p "$src_path" "$dest_path";
+    if [[ $? -ne 0 ]]; then
+        stderr "Error: Failed to create pristine backup at '$dest_path'.";
+        return 1;
+    fi;
     return 0;
 }
 
+#-------------------------------------------------------------------------------
+# @_enrich_working_copy
+#-------------------------------------------------------------------------------
+_enrich_working_copy() {
+    local pkg_name="$1";
+    local working_copy_path;
+    working_copy_path=$(_get_workspace_path "$pkg_name" "pkg");
+
+    # 1. READ
+    declare -A meta_map;
+    _get_all_header_meta "$working_copy_path" meta_map;
+
+    # 2. MODIFY
+    declare -A canonical_map;
+    _get_canonical_meta "$pkg_name" canonical_map;
+
+    # Merge canonical values into the main map, overwriting where necessary
+    for key in "${!canonical_map[@]}"; do
+        meta_map["$key"]="${canonical_map[$key]}";
+    done
+
+    # 3. WRITE
+    if ! __write_header_block "$working_copy_path" meta_map; then
+        stderr "Error: Failed to write enriched header block.";
+        return 1;
+    fi;
+
+    return 0;
+}
+
+#-------------------------------------------------------------------------------
+# @_get_all_header_meta
+#-------------------------------------------------------------------------------
 _get_all_header_meta() {
-    local path="$1"; local -n map_ref="$2"; map_ref=();
+    local path="$1";
+    local -n map_ref="$2"; # Nameref to the associative array
+    map_ref=();
+
     if [[ ! -r "$path" ]]; then return 1; fi;
+
     while read -r line; do
         if [[ "$line" =~ ^#\s*([a-zA-Z0-9_]+):[[:space:]]*(.*)$ ]]; then
-            map_ref["${BASH_REMATCH[1]}"]="${BASH_REMATCH[2]}";
+            local key="${BASH_REMATCH[1]}";
+            local value="${BASH_REMATCH[2]}";
+            map_ref["$key"]="$value";
         fi;
     done < <(grep -E "^#\s*[a-zA-Z0-9_]+:" "$path");
+
     return 0;
 }
 
-_get_field_index() {
-    local field_name="$1"; local header; header=$(__get_manifest_header);
-    if [[ -z "$header" ]]; then stderr "Error: Could not read manifest header."; return 1; fi;
-    local res; res=$(printf "%s" "$header" | awk -v field="$field_name" 'BEGIN { RS="\t" } { if ($0 == field) { print NR; exit } }');
-    if [[ -z "$res" ]]; then return 1; fi;
-    printf "%s" "$res"; return 0;
-}
-
-_get_manifest_field() {
-    local pkg_name="$1"; local field_name="$2"; local row; row=$(_get_manifest_row "$pkg_name");
-    if [[ -z "$row" ]]; then return 1; fi;
-    local index; index=$(_get_field_index "$field_name");
-    if [[ -z "$index" ]]; then stderr "Error: Field '$field_name' not found in manifest header."; return 1; fi;
-    local res; res=$(printf "%s" "$row" | awk -v idx="$index" -F'\t' '{print $idx}');
-    printf "%s" "$res"; return 0;
-}
-
-_get_manifest_row() {
-    local pkg_name="$1"; __read_manifest_file; local res;
-    res=$(printf "%s\n" "${MANIFEST_DATA[@]}" | grep -E "^${pkg_name}\t");
-    if [[ -z "$res" ]]; then return 1; fi;
-    printf "%s" "$res"; return 0;
-}
-
-_get_true_source_path() {
-    local pkg_name="$1"; local prefix=${pkg_name%%.*}; local script_name=${pkg_name#*.};
-    if [[ "$pkg_name" == "$prefix" || -z "$script_name" ]]; then
-        stderr "Error: Invalid package name format: '$pkg_name'."; return 1;
-    fi;
-    if [[ "$prefix" == "util" ]]; then prefix="utils"; fi;
-    printf "%s" "${SRC_TREE}/pkgs/${prefix}/${script_name}/${script_name}.sh";
-}
-
-_get_working_path() {
+#-------------------------------------------------------------------------------
+# @_get_canonical_meta
+#-------------------------------------------------------------------------------
+_get_canonical_meta() {
     local pkg_name="$1";
-    local working_path="${WORK_DIR}/${pkg_name}.pkg.sh";
-    if [[ ! -f "$working_path" ]]; then
-        stderr "Workspace for '$pkg_name' not found. Preparing...";
-        if ! _prepare_workspace_for_pkg "$pkg_name"; then
-            stderr "Error: Failed to prepare workspace for '$pkg_name'.";
-            return 1;
-        fi;
-    fi;
-    printf "%s" "$working_path";
+    local -n map_ref="$2"; # Nameref to the associative array
+    map_ref=();
+    
+    local working_path;
+    working_path=$(_get_workspace_path "$pkg_name" "pkg");
+    local true_path;
+    true_path=$(_get_true_source_path "$pkg_name");
+
+    # These are the fields that packagex calculates and manages.
+    map_ref["pkg_name"]="$pkg_name";
+    map_ref["path"]="$true_path";
+    map_ref["checksum"]=$(__get_file_checksum "$working_path");
+    
+    # Provide sensible defaults for core fields if they don't exist
+    local ver; ver=$(__get_header_meta "$working_path" "version");
+    map_ref["version"]="${ver:-v0.1.0}";
+    
+    local alias; alias=$(__get_header_meta "$working_path" "alias");
+    map_ref["alias"]="${alias:-${pkg_name#*.}}";
+
     return 0;
 }
 
-_link_package() {
-    local pkg_name="$1"; stderr "Linking package executable...";
-    local working_path; working_path=$(_get_working_path "$pkg_name");
-    local alias; alias=$(_get_manifest_field "$pkg_name" "alias");
-    # The symlink source is now the ENRICHED working copy, not the true source.
-    local lib_path="${TARGET_LIB_DIR}/${TARGET_NAMESPACE}/${pkg_name}.sh";
-    local link_path="${TARGET_BIN_DIR}/${TARGET_NAMESPACE}/${alias}";
-    if ! __create_symlink "$lib_path" "$link_path"; then return 1; fi;
-    if ! _update_manifest_field "$pkg_name" "status" "INSTALLED"; then return 1; fi;
-    stderr "Package linked to: $link_path"; return 0;
-}
-
-_load_package() {
-    local pkg_name="$1"; stderr "Loading package artifacts...";
-    local working_path; working_path=$(_get_working_path "$pkg_name");
-    # The destination name in lib is now the canonical pkg_name, not the original filename.
-    local dest_path="${TARGET_LIB_DIR}/${TARGET_NAMESPACE}/${pkg_name}.sh";
-    if ! __copy_file "$working_path" "$dest_path"; then return 1; fi;
-    if ! _update_manifest_field "$pkg_name" "status" "LOADED"; then return 1; fi;
-    stderr "Package loaded to: $dest_path"; return 0;
-}
-
-_prepare_workspace_for_pkg() {
-    local pkg_name="$1";
-    if [[ ! -d "$WORK_DIR" ]]; then
-        mkdir -p "$WORK_DIR" || { stderr "Error: Could not create WORK_DIR."; return 1; };
+#-------------------------------------------------------------------------------
+# @__write_header_block
+#-------------------------------------------------------------------------------
+__write_header_block() {
+    local path="$1";
+    local -n data_map_ref="$2";
+    local header_content;
+    
+    # Check if a meta block already exists to replace it
+    if grep -q "# --- META ---" "$path"; then
+        header_content+="\n#\n# --- META ---\n#\n# meta:\n";
+        for key in $(printf "%s\n" "${!data_map_ref[@]}" | sort); do
+            header_content+=$(printf "#   %s: %s\n" "$key" "${data_map_ref[$key]}");
+        done
+        header_content+="#\n";
+        sed -i "/^# --- META ---$/,/^#\s*$/c\\${header_content}" "$path";
+    else
+        # If no block exists, inject a new one after the shebang
+        header_content+='\n#\n# --- META ---\n#\n# meta:\n';
+        for key in $(printf "%s\n" "${!data_map_ref[@]}" | sort); do
+            header_content+=$(printf '#   %s: %s\n' "$key" "${data_map_ref[$key]}");
+        done
+        header_content+='#\n';
+        sed -i "2r /dev/stdin" "$path" <<< "$header_content";
     fi;
-    local true_source_path; true_source_path=$(_get_true_source_path "$pkg_name");
-    if [[ ! -r "$true_source_path" ]]; then
-        stderr "Error: True source file not found at '$true_source_path'."; return 1;
-    fi;
-    # Copy to both working and orig files
-    __copy_file "$true_source_path" "${WORK_DIR}/${pkg_name}.pkg.sh";
-    __copy_file "$true_source_path" "${WORK_DIR}/${pkg_name}.orig.sh";
+
     return $?;
 }
 
-_uninstall_package() {
-    local pkg_name="$1";
-    local alias; alias=$(_get_manifest_field "$pkg_name" "alias");
-    local lib_path="${TARGET_LIB_DIR}/${TARGET_NAMESPACE}/${pkg_name}.sh";
-    local link_path="${TARGET_BIN_DIR}/${TARGET_NAMESPACE}/${alias}";
-    stderr "Removing symlink..."; if ! __remove_symlink "$link_path"; then return 1; fi;
-    stderr "Removing library file..."; if ! __remove_file "$lib_path"; then return 1; fi;
-    _update_manifest_field "$pkg_name" "status" "REMOVED"; return 0;
-}
+#-------------------------------------------------------------------------------
+# @_display_meta_array
+#-------------------------------------------------------------------------------
+_display_meta_array() {
+    local -n map_ref="$1"; # Nameref to the associative array
 
-_update_manifest_field() {
-    local pkg_name="$1"; local field_name="$2"; local new_value="$3";
-    local field_index; field_index=$(_get_field_index "$field_name");
-    if [[ -z "$field_index" ]]; then stderr "Error: Field '$field_name' not found."; return 1; fi;
-    awk -i inplace -v pkg="$pkg_name" -v idx="$field_index" -v val="$new_value" \
-        'BEGIN { FS=OFS="\t" } { if ($1 == pkg) $idx = val; print }' "$MANIFEST_PATH";
-    return $?;
-}
-
-
-# --- LOW-LEVEL HELPERS ---
-
-__add_row_to_manifest() {
-    local row_string="$1";
-    local header="pkg_name\tstatus\tversion\tbuild\talias\tpath\tchecksum\tdeps\t::";
-    if [[ ! -f "$MANIFEST_PATH" ]]; then
-        printf "%s\n" "$header" > "$MANIFEST_PATH" || { stderr "Error: Could not create manifest."; return 1; };
+    if [[ ${#map_ref[@]} -eq 0 ]]; then
+        stderr "Notice: No metadata to display.";
+        return 0;
     fi;
-    printf "%s\n" "$row_string" >> "$MANIFEST_PATH"; return $?;
-}
 
-__copy_file() {
-    local src_path="$1"; local dest_path="$2"; local dest_dir;
-    dest_dir=$(dirname "$dest_path");
-    if [[ ! -d "$dest_dir" ]]; then
-        mkdir -p "$dest_dir" || { stderr "Error: Could not create directory: $dest_dir"; return 1; };
-    fi;
-    cp -p "$src_path" "$dest_path"; return $?;
-}
-
-__create_symlink() {
-    local src_path="$1"; local link_path="$2"; local link_dir;
-    link_dir=$(dirname "$link_path");
-     if [[ ! -d "$link_dir" ]]; then
-        mkdir -p "$link_dir" || { stderr "Error: Could not create directory: $link_dir"; return 1; };
-    fi;
-    ln -sf "$src_path" "$link_path"; return $?;
-}
-
-__get_file_checksum() {
-    local path="$1"; if [[ ! -r "$path" ]]; then return 1; fi;
-    local res; res=$(sha256sum "$path" 2>/dev/null | awk '{print $1}');
-    if [[ -z "$res" ]]; then return 1; fi;
-    printf "%s" "$res"; return 0;
-}
-
-__get_header_meta() {
-    local path="$1"; local key="$2"; if [[ ! -r "$path" ]]; then return 1; fi;
-    local res; res=$(grep -E "^#\s*${key}:" "$path" | head -n 1 | awk -F': ' '{print $2}');
-    if [[ -z "$res" ]]; then return 1; fi;
-    printf "%s" "$res"; return 0;
-}
-
-__get_manifest_header() {
-    if [[ -n "$MANIFEST_HEADER" ]]; then printf "%s" "$MANIFEST_HEADER"; return 0; fi;
-    if [[ ! -r "$MANIFEST_PATH" ]]; then return 1; fi;
-    read -r MANIFEST_HEADER < "$MANIFEST_PATH";
-    printf "%s" "$MANIFEST_HEADER"; return 0;
-}
-
-__read_manifest_file() {
-    if [[ ${#MANIFEST_DATA[@]} -gt 0 ]]; then return 0; fi;
-    if [[ ! -r "$MANIFEST_PATH" ]]; then return 1; fi;
-    mapfile -t MANIFEST_DATA < "$MANIFEST_PATH"; return 0;
-}
-
-__remove_file() {
-    local path="$1"; if [[ -f "$path" ]]; then
-        rm "$path" || { stderr "Error: Failed to remove file: $path"; return 1; };
-    else stderr "Notice: File not found at $path."; fi; return 0;
-}
-
-__remove_row_from_manifest() { local pkg_name="$1"; sed -i "/^${pkg_name}\t/d" "$MANIFEST_PATH"; return $?; }
-
-__remove_symlink() {
-    local link_path="$1"; if [[ -L "$link_path" ]]; then
-        rm "$link_path" || { stderr "Error: Failed to remove symlink: $link_path"; return 1; };
-    else stderr "Notice: Symlink not found at $link_path."; fi; return 0;
-}
-
-__rewrite_header() {
-    local path="$1"; local -n data_map_ref="$2"; local header_content;
-    header_content+="\n#\n# --- META ---\n#\n# meta:\n";
-    for key in $(printf "%s\n" "${!data_map_ref[@]}" | sort); do
-        header_content+=$(printf "#   %s: %s\n" "$key" "${data_map_ref[$key]}");
+    # Print sorted keys and their values
+    for key in $(printf "%s\n" "${!map_ref[@]}" | sort); do
+        printf "%s: %s\n" "$key" "${map_ref[$key]}";
     done
-    header_content+="#\n";
-    sed -i "/^# --- META ---$/,/^#\s*$/c\\${header_content}" "$path"; return $?;
-}
 
-
-# --- API FUNCTIONS ---
-
-do_cache() {
-    local pkg_name="$1"; if [[ -z "$pkg_name" ]]; then usage; return 1; fi;
-    local working_path; working_path=$(_get_working_path "$pkg_name");
-    stderr "Caching header metadata for '$pkg_name'...";
-    declare -A header_map; _get_all_header_meta "$working_path" header_map;
-    if [[ ${#header_map[@]} -eq 0 ]]; then
-        stderr "Warning: No metadata found in header. Caching empty record.";
-    fi;
-    local partial_data=("${pkg_name}" "INCOMPLETE" "${header_map[version]:-n/a}" "n/a" "${header_map[alias]:-n/a}" "n/a" "n/a" "${header_map[deps]:-n/a}");
-    local new_row; new_row=$(_build_manifest_row "${partial_data[@]}");
-    local existing_row; existing_row=$(_get_manifest_row "$pkg_name");
-    if [[ -n "$existing_row" ]]; then sed -i "s|^${pkg_name}\t.*|${new_row//&/\\&}|" "$MANIFEST_PATH";
-    else __add_row_to_manifest "$new_row"; fi;
-    stderr "Caching complete."; do_status "$pkg_name"; return 0;
-}
-
-do_checksum() { noop; }
-
-do_clean() {
-    local pkg_name="$1"; if [[ -z "$pkg_name" ]]; then usage; return 1; fi;
-    local status; status=$(_get_manifest_field "$pkg_name" "status");
-    if [[ "$status" != "REMOVED" ]]; then
-        stderr "Error: Package '$pkg_name' is not in REMOVED state."; return 1;
-    fi;
-    local prompt="Permanently remove '$pkg_name}' from the manifest?";
-    if ! _confirm_action "$prompt"; then stderr "Clean aborted."; return 1; fi;
-    if ! __remove_row_from_manifest "$pkg_name"; then
-        stderr "Error: Failed to remove row from manifest."; return 1;
-    fi;
-    stderr "Package '$pkg_name' cleaned from manifest."; return 0;
-}
-
-do_disable() {
-    local pkg_name="$1"; if [[ -z "$pkg_name" ]]; then usage; return 1; fi;
-    local status; status=$(_get_manifest_field "$pkg_name" "status");
-    if [[ "$status" != "INSTALLED" ]]; then
-        stderr "Error: Package '$pkg_name' is not INSTALLED."; return 1;
-    fi;
-    local alias; alias=$(_get_manifest_field "$pkg_name" "alias");
-    local link_path="${TARGET_BIN_DIR}/${TARGET_NAMESPACE}/${alias}";
-    if ! __remove_symlink "$link_path"; then return 1; fi;
-    _update_manifest_field "$pkg_name" "status" "DISABLED";
-    stderr "Package '$pkg_name' disabled."; do_status "$pkg_name"; return 0;
-}
-
-do_enable() {
-    local pkg_name="$1"; if [[ -z "$pkg_name" ]]; then usage; return 1; fi;
-    local status; status=$(_get_manifest_field "$pkg_name" "status");
-    if [[ "$status" != "DISABLED" ]]; then
-        stderr "Error: Package '$pkg_name' is not DISABLED."; return 1;
-    fi;
-    if ! _link_package "$pkg_name"; then stderr "Error: Failed to re-link."; return 1; fi;
-    stderr "Package '$pkg_name' enabled."; do_status "$pkg_name"; return 0;
-}
-
-do_install() {
-    local pkg_name="$1"; if [[ -z "$pkg_name" ]]; then usage; return 1; fi;
-    local status; status=$(_get_manifest_field "$pkg_name" "status");
-    if [[ -z "$status" ]]; then
-        stderr "Package not in manifest. Registering first...";
-        if ! do_register "$pkg_name"; then return 1; fi;
-        status=$(_get_manifest_field "$pkg_name" "status");
-    fi;
-    case "$status" in
-        (INSTALLED) if [[ "$opt_force" -eq 0 ]]; then
-            stderr "Package '$pkg_name' is already installed. Use -f to force."; return 0;
-            fi; ;&
-        (KNOWN|INCOMPLETE|DISABLED|LOADED)
-            if ! _load_package "$pkg_name"; then return 1; fi;
-            if ! _link_package "$pkg_name"; then return 1; fi; ;;
-        (REMOVED) stderr "Package previously uninstalled. Use 'restore'."; return 1; ;;
-        (*) stderr "Error: Unhandled status '$status'."; return 1; ;;
-    esac
-    stderr "Installation of '$pkg_name' complete."; do_status "$pkg_name"; return 0;
-}
-
-do_meta() {
-    local pkg_name="$1"; if [[ -z "$pkg_name" ]]; then usage; return 1; fi;
-    local working_path; working_path=$(_get_working_path "$pkg_name");
-    if [[ ! -r "$working_path" ]]; then
-        stderr "Error: Working file for '$pkg_name' not found."; return 1;
-    fi;
-    grep -E "^#\s*[a-zA-Z0-9_]+:" "$working_path" | sed -e 's/^#\s*//' -e 's/:\s*/: /';
     return 0;
 }
 
-do_normalize() {
-    local pkg_name="$1"; if [[ -z "$pkg_name" ]]; then usage; return 1; fi;
-    local working_path; working_path=$(_get_working_path "$pkg_name");
-    if [[ ! -w "$working_path" ]]; then stderr "Error: Working file not writable."; return 1; fi;
-    stderr "Injecting standard metadata header...";
-    local ver="v0.1.0"; local alias=${pkg_name#*.};
-    if ! __rewrite_header "$working_path" "version:$ver" "alias:$alias"; then
-        stderr "Error: Failed to inject header."; return 1;
+# Milestone 2: State Persistence & Deployment
+# implement _register_package | Ensures workspace is prepared, then builds and writes the manifest row.
+# implement __write_manifest_row | Low-level writer that appends or updates a row in the manifest file.
+# implement _get_manifest_row | Input: pkg_name. Output: The raw manifest line for the package.
+# implement _display_status_info | Input: row_string. Formats and prints manifest data for the user.
+# implement _deploy_package | Copies the working copy to lib and creates the symlink in bin.
+# implement _update_manifest_status | A dedicated helper to update only the status field in the manifest.
+# implement __copy_to_lib | A wrapper around cp to copy the working copy to its final lib destination.
+# implement __create_bin_symlink | A wrapper around ln -s to create the executable symlink.
+
+# Milestone 3: Symmetrical Lifecycle & Maintenance
+# implement _deactivate_package | Core logic for uninstall. Removes symlink and lib file.
+# implement __remove_bin_symlink | Removes the executable symlink from bin.
+# implement __remove_lib_file | Removes the script file from lib.
+# implement _purge_package | Core logic for clean. Removes manifest row AND workspace assets.
+# implement __remove_manifest_row | Removes the entire row for a package from the manifest.
+# implement __remove_from_workspace | Removes both .pkg.sh and .orig.sh files from the workspace.
+# implement _is_update_required | Compares checksum of pristine source vs. workspace backup.
+# implement _re_register_package | Core logic for update. Removes old workspace assets and re-runs the full registration flow.
+
+
+# --- API FUNCTIONS (v2.1) ---
+
+# M1 Commands
+function do_prepare() {
+    local pkg_name="$1";
+    if [[ -z "$pkg_name" ]]; then
+        usage;
+        return 1;
     fi;
-    stderr "Normalization complete for '$pkg_name'."; return 0;
+
+    stderr "Preparing workspace for '$pkg_name'...";
+    if ! _prepare_workspace_for_pkg "$pkg_name"; then
+        stderr "Workspace preparation failed.";
+        return 1;
+    fi;
+
+    stderr "Workspace for '$pkg_name' is ready.";
+    return 0;
+}
+function do_normalize() {
+    local pkg_name="$1";
+    if [[ -z "$pkg_name" ]]; then
+        usage;
+        return 1;
+    fi;
+
+    stderr "Normalizing (enriching) workspace for '$pkg_name'...";
+    if ! _enrich_working_copy "$pkg_name"; then
+        stderr "Normalization failed.";
+        return 1;
+    fi;
+
+    stderr "Normalization complete.";
+    return 0;
+}
+function do_meta() {
+    local pkg_name="$1";
+    if [[ -z "$pkg_name" ]]; then
+        usage;
+        return 1;
+    fi;
+
+    local working_copy_path;
+    working_copy_path=$(_get_workspace_path "$pkg_name" "pkg");
+
+    if [[ ! -r "$working_copy_path" ]]; then
+        stderr "Error: Workspace for '$pkg_name' has not been prepared. Run 'prepare' first.";
+        return 1;
+    fi;
+
+    declare -A meta_map;
+    _get_all_header_meta "$working_copy_path" meta_map;
+    
+    _display_meta_array meta_map;
+    return $?;
 }
 
-do_register() {
-    local pkg_name="$1"; if [[ -z "$pkg_name" ]]; then usage; return 1; fi;
-    local working_path; working_path=$(_get_working_path "$pkg_name");
-    declare -A meta_map; _get_all_header_meta "$working_path" meta_map;
-    stderr "Gathering package data...";
-    local PkgxDataStr; PkgxDataStr=$(_gather_package_meta "$pkg_name");
-    if [[ -z "$PkgxDataStr" ]]; then return 1; fi;
-    local PkgxFields=("pkg_name" "status" "version" "build" "alias" "path" "checksum" "deps");
-    local PkgxDataArr=($PkgxDataStr);
-    for i in "${!PkgxFields[@]}"; do
-        meta_map[${PkgxFields[$i]}]="${PkgxDataArr[$i]}";
-    done
-    local new_row; new_row=$(_build_manifest_row "${PkgxDataArr[@]}");
-    local existing_row; existing_row=$(_get_manifest_row "$pkg_name");
-    if [[ -n "$existing_row" ]]; then sed -i "s|^${pkg_name}\t.*|${new_row//&/\\&}|" "$MANIFEST_PATH";
-    else __add_row_to_manifest "$new_row"; fi;
-    if [[ $? -ne 0 ]]; then stderr "Error: Failed to write to manifest."; return 1; fi;
-    stderr "Enriching source file header...";
-    if ! __rewrite_header "$working_path" meta_map; then
-        stderr "Warning: Failed to enrich source file header.";
-    fi;
-    stderr "Registration complete."; do_status "$pkg_name"; return 0;
-}
+# M2 Commands
+function do_register() { # Calls: _register_package
+    noop; }
+function do_status() { # Calls: _get_manifest_row, _display_status_info
+    noop; }
+function do_install() { # Calls: _deploy_package
+    noop; }
 
-do_restore() {
-    local pkg_name="$1"; if [[ -z "$pkg_name" ]]; then usage; return 1; fi;
-    local status; status=$(_get_manifest_field "$pkg_name" "status");
-    if [[ "$status" != "REMOVED" ]]; then
-        stderr "Error: Package is not in REMOVED state."; return 1;
-    fi;
-    stderr "Restoring package...";
-    if ! _load_package "$pkg_name"; then return 1; fi;
-    if ! _link_package "$pkg_name"; then return 1; fi;
-    stderr "Package '$pkg_name' restored."; do_status "$pkg_name"; return 0;
-}
-
-do_uninstall() {
-    local pkg_name="$1"; if [[ -z "$pkg_name" ]]; then usage; return 1; fi;
-    local status; status=$(_get_manifest_field "$pkg_name" "status");
-    if [[ "$status" != "INSTALLED" && "$status" != "DISABLED" ]]; then
-        stderr "Error: Package cannot be uninstalled. State: $status"; return 1;
-    fi;
-    if ! _uninstall_package "$pkg_name"; then stderr "Uninstall failed."; return 1; fi;
-    stderr "Package '$pkg_name' uninstalled."; do_status "$pkg_name"; return 0;
-}
-
-do_update() {
-    local pkg_name="$1"; if [[ -z "$pkg_name" ]]; then usage; return 1; fi;
-    stderr "Checking for updates for '$pkg_name'...";
-    local true_source_path; true_source_path=$(_get_true_source_path "$pkg_name");
-    local orig_path="${WORK_DIR}/${pkg_name}.orig.sh";
-    if [[ ! -f "$orig_path" ]]; then
-        stderr "No baseline found for '$pkg_name'. Please register it first."; return 1;
-    fi;
-    local true_sum; true_sum=$(__get_file_checksum "$true_source_path");
-    local orig_sum; orig_sum=$(__get_file_checksum "$orig_path");
-    if [[ "$true_sum" == "$orig_sum" ]]; then
-        stderr "No changes detected. Workspace is up-to-date."; return 0;
-    fi;
-    stderr "Update detected. Re-caching workspace files...";
-    if ! _prepare_workspace_for_pkg "$pkg_name"; then return 1; fi;
-    stderr "Re-registering to enrich new workspace file...";
-    if ! do_register "$pkg_name"; then return 1; fi;
-    stderr "Update complete. Re-run 'install' to deploy the new version."; return 0;
-}
+# M3 Commands
+function do_uninstall() { # Calls: _deactivate_package
+    noop; }
+function do_disable() { # Calls: __remove_bin_symlink, _update_manifest_status
+    noop; }
+function do_enable() { # Calls: __create_bin_symlink, _update_manifest_status
+    noop; }
+function do_clean() { # Calls: _purge_package
+    noop; }
+function do_update() { # Calls: _is_update_required, _re_register_package
+    noop; }
+function do_restore() { # Calls: _deploy_package (re-uses install logic)
+    noop; }
 
 
 # --- CORE FUNCTIONS ---
 
-dispatch() {
-    local cmd="$1"; if [[ -z "$cmd" ]]; then usage; return 1; fi; shift;
-    case "$cmd" in
-        (\#) dev_dispatch "$@"; exit $?;;
-        (install|uninstall|enable|disable|status|meta|normalize|register|restore|clean|update|checksum|cache)
-            "do_${cmd}" "$@";;
-        (driver) do_driver "$@";;
-        (*) stderr "Error: Unknown command '$cmd'"; usage; return 1;;
-    esac;
+function usage() {
+    printf "Usage: %s <command> [options] <package_name>\n" "$APP_NAME";
+    printf "  A utility to manage a non-destructive workspace of local bash scripts.\n\n";
+    printf "  Workspace Commands:\n";
+    printf "    prepare   [M1] Creates the workspace for a package.\n";
+    printf "    normalize [M1] Enriches the header of a package's working copy.\n";
+    printf "    update    [M3] Refreshes workspace from the pristine source file.\n\n";
+    printf "  Lifecycle Commands:\n";
+    printf "    register  [M2] Writes a prepared package's state to the manifest.\n";
+    printf "    install   [M2] Deploys a registered package to your system.\n";
+    printf "    uninstall [M3] Deactivates a package and removes deployed files.\n";
+    printf "    clean     [M3] Purges all records and files for a package.\n\n";
+    printf "  Inspection & Utility Commands:\n";
+    printf "    status    [M2] Shows a package's status from the manifest.\n";
+    printf "    meta      [M1] Reads a package's enriched header from the workspace.\n";
+    printf "    enable    [M3] Re-links a disabled package.\n";
+    printf "    disable   [M3] Unlinks an installed package.\n";
+    printf "    restore   [M3] Re-installs a package from its workspace cache.\n\n";
 }
 
-main() {
-    options "$@"; local shifted_args=("${@:$OPTIND}");
-    if [[ "${shifted_args[0]}" == '$' ]]; then
-        dev_dispatch "${shifted_args[@]:1}"; exit $?;
-    fi;
-    dispatch "${shifted_args[@]}";
-}
-
-options() {
-    while getopts ":dtqfyD" opt; do
+function options() {
+    # Per MVP, -D is not implemented. DEV_MODE is set via environment.
+    while getopts ":dtqfy" opt; do
         case $opt in
-            (d) opt_debug=1;; (t) opt_trace=1; opt_debug=1;;
-            (q) QUIET_MODE=1; opt_quiet=1;; (f) opt_force=1;;
-            (y) opt_yes=1;; (D) DEV_MODE=1; opt_dev=1;;
+            (d) opt_debug=1;;
+            (t) opt_trace=1; opt_debug=1;;
+            (q) QUIET_MODE=1; opt_quiet=1;;
+            (f) opt_force=1;;
+            (y) opt_yes=1;;
             \?) stderr "Error: Invalid option: -$OPTARG" >&2; usage; return 1;;
         esac
     done;
     return 0;
 }
 
-usage() {
-    printf "Usage: %s <command> [options] [arguments]\n" "$APP_NAME";
-    printf "  A utility to manage a workspace of local bash scripts.\n\n";
-    printf "Commands:\n";
-    printf "  install <pkg>     Install a package from the workspace.\n";
-    printf "  update <pkg>      Refresh workspace from the true source file.\n";
-    printf "  register <pkg>    Prepare and enrich a package in the workspace.\n";
-    printf "  normalize <pkg>   (DEPRECATED) Use 'register' instead.\n";
-    printf "  cache <pkg>       Cache header metadata to the manifest.\n";
-    printf "  meta <pkg>        Read a package's enriched header from workspace.\n";
-    printf "  status <pkg|all>  Check the status of package(s) in the manifest.\n";
-    printf "  ... and more lifecycle commands (uninstall, enable, etc.)\n";
+function dispatch() {
+    local cmd="$1";
+    if [[ -z "$cmd" ]]; then usage; return 1; fi;
+    shift;
+
+    case "$cmd" in
+        (\#)
+            if is_dev; then dev_dispatch "$@";
+            else stderr "Error: '#' command is only available in DEV_MODE."; return 1; fi;;
+        (prepare|normalize|meta|register|status|install|uninstall|disable|enable|clean|update|restore)
+            "do_${cmd}" "$@";;
+        (*)
+            stderr "Error: Unknown command '$cmd'"; usage; return 1;;
+    esac;
+}
+
+function main() {
+    options "$@";
+    local shifted_args=("${@:$((OPTIND))}");
+
+    if is_dev && [[ "${shifted_args[0]}" == '$' ]]; then
+        local dev_args=("${shifted_args[@]:1}");
+        dev_dispatch "${dev_args[@]}";
+    fi;
+
+    dispatch "${shifted_args[@]}";
 }
 
 
