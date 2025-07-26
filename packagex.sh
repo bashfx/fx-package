@@ -165,6 +165,56 @@ _resolve_pkg_prefix() {
 }
 
 #-------------------------------------------------------------------------------
+# @_gather_package_meta
+#-------------------------------------------------------------------------------
+_gather_package_meta() {
+    local pkg_name="$1";
+    local src_path;
+
+    src_path=$(_get_source_path "$pkg_name");
+    if [[ ! -r "$src_path" ]]; then
+        stderr "Error: Source path for '$pkg_name' not found: $src_path";
+        return 1;
+    fi;
+
+    # Gather all metadata, providing sensible defaults.
+    local ver;
+    ver=$(__get_header_meta "$src_path" "version");
+    [[ -z "$ver" ]] && ver="v0.1.0";
+
+    local alias;
+    alias=$(__get_header_meta "$src_path" "alias");
+    [[ -z "$alias" ]] && alias=$(printf "%s" "$pkg_name" | cut -d'.' -f2);
+
+    local deps;
+    deps=$(__get_header_meta "$src_path" "deps");
+    [[ -z "$deps" ]] && deps="none";
+    
+    local checksum;
+    checksum=$(__get_file_checksum "$src_path");
+
+    # Determine status based on completeness of metadata
+    local status="KNOWN";
+    if [[ "$ver" == "v0.1.0" || "$alias" == "$(printf "%s" "$pkg_name" | cut -d'.' -f2)" ]]; then
+        status="INCOMPLETE";
+    fi;
+
+    # The order of fields here MUST match the manifest header.
+    # pkg_name, status, version, build, alias, path, checksum, deps
+    printf "%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s" \
+        "$pkg_name" \
+        "$status" \
+        "$ver" \
+        "$BUILD_START_NUMBER" \
+        "$alias" \
+        "$src_path" \
+        "$checksum" \
+        "$deps";
+
+    return 0;
+}
+
+#-------------------------------------------------------------------------------
 # @_get_field_index
 #-------------------------------------------------------------------------------
 _get_field_index() {
@@ -690,21 +740,92 @@ do_meta() {
     
     return "$ret";
 }
+#-------------------------------------------------------------------------------
+# @do_normalize
+#-------------------------------------------------------------------------------
+do_normalize() {
+    local pkg_name="$1";
+    local src_path;
 
-################################################################################
-#  do_normalize <pkg_name>
-################################################################################
-function do_normalize() {
-    # Calls: _check_git_status, __backup_file, __inject_header
-    noop;
+    if [[ -z "$pkg_name" ]]; then
+        stderr "Error: normalize command requires a package name.";
+        usage;
+        return 1;
+    fi;
+
+    src_path=$(_get_source_path "$pkg_name");
+    if [[ ! -w "$src_path" ]]; then
+        stderr "Error: Source file for '$pkg_name' not found or not writable: $src_path";
+        return 1;
+    fi;
+
+    if [[ "$opt_force" -eq 0 ]]; then
+        if ! _check_git_status "$src_path"; then
+            return 1;
+        fi;
+    fi;
+
+    stderr "Backing up original file...";
+    if ! __backup_file "$src_path"; then
+        stderr "Error: Failed to back up file.";
+        return 1;
+    fi;
+
+    stderr "Injecting standard header...";
+    if ! __inject_header "$src_path"; then
+        stderr "Error: Failed to inject header.";
+        # Consider a restore step here in the future.
+        return 1;
+    fi;
+
+    stderr "Normalization complete for '$pkg_name'.";
+    return 0;
 }
 
-################################################################################
-#  do_register <pkg_name>
-################################################################################
-function do_register() {
-    # Calls: _gather_package_meta, _build_manifest_row, __add_row_to_manifest
-    noop;
+#-------------------------------------------------------------------------------
+# @do_register
+#-------------------------------------------------------------------------------
+do_register() {
+    local pkg_name="$1";
+    local meta_data;
+
+    if [[ -z "$pkg_name" ]]; then
+        stderr "Error: register command requires a package name.";
+        usage;
+        return 1;
+    fi;
+    
+    stderr "Gathering metadata for '$pkg_name'...";
+    meta_data=$(_gather_package_meta "$pkg_name");
+    if [[ $? -ne 0 ]]; then
+        # _gather_package_meta prints its own errors
+        return 1;
+    fi;
+    
+    local new_row;
+    new_row=$(_build_manifest_row $meta_data);
+
+    local existing_row;
+    existing_row=$(_get_manifest_row "$pkg_name");
+
+    if [[ -n "$existing_row" ]]; then
+        stderr "Updating existing entry in manifest...";
+        # Use sed to replace the existing line. The & is escaped to handle paths.
+        sed -i "s|^${pkg_name}\t.*|${new_row//&/\\&}|" "$MANIFEST_PATH";
+    else
+        stderr "Adding new entry to manifest...";
+        __add_row_to_manifest "$new_row";
+    fi;
+    
+    if [[ $? -eq 0 ]]; then
+        stderr "Registration complete.";
+        do_status "$pkg_name"; # Show the result
+    else
+        stderr "Error: Failed to write to manifest.";
+        return 1;
+    fi;
+
+    return 0;
 }
 
 ################################################################################
