@@ -596,11 +596,30 @@ _uninstall_package() {
 }
 
 
-# implement _confirm_action | Input: prompt_string. A generic helper that prompts the user for [y/N] confirmation.
+#-------------------------------------------------------------------------------
+# @_confirm_action
+#-------------------------------------------------------------------------------
+_confirm_action() {
+    local prompt_string="$1";
+    local answer;
 
-# --- Low-Level Helpers ---
-# implement __read_manifest_file | Input: (none). Output: Writes manifest content to a global array.
-# implement __get_manifest_header | Input: (none). Output: The first line of the manifest.
+    # If -y flag is passed, automatically confirm.
+    if [[ "$opt_yes" -eq 1 ]]; then
+        return 0;
+    fi;
+
+    read -r -p "$prompt_string [y/N] " answer;
+    case "$answer" in
+        (y|Y)
+            return 0;
+            ;;
+        (*)
+            return 1;
+            ;;
+    esac;
+}
+
+
 
 
 __get_file_checksum() {
@@ -733,8 +752,16 @@ __remove_file() {
 }
 
 
-
-# implement __remove_row_from_manifest | Input: pkg_name. Uses sed to delete the line from the manifest.
+#-------------------------------------------------------------------------------
+# @__remove_row_from_manifest
+#-------------------------------------------------------------------------------
+__remove_row_from_manifest() {
+    local pkg_name="$1";
+    
+    # Use sed to find and delete the line starting with the package name.
+    sed -i "/^${pkg_name}\t/d" "$MANIFEST_PATH";
+    return $?;
+}
 
 
 # --- API FUNCTIONS ---
@@ -882,20 +909,73 @@ do_uninstall() {
     return 0;
 }
 
-################################################################################
-#  do_restore <pkg_name>
-################################################################################
-function do_restore() {
-    # Calls: _load_package, _link_package
-    noop;
+#-------------------------------------------------------------------------------
+# @do_restore
+#-------------------------------------------------------------------------------
+do_restore() {
+    local pkg_name="$1";
+    if [[ -z "$pkg_name" ]]; then
+        stderr "Error: restore command requires a package name.";
+        usage;
+        return 1;
+    fi;
+
+    local status;
+    status=$(_get_manifest_field "$pkg_name" "status");
+    if [[ "$status" != "REMOVED" ]]; then
+        stderr "Error: Package '$pkg_name' is not in REMOVED state (current: $status).";
+        return 1;
+    fi;
+
+    stderr "Restoring package from manifest data...";
+
+    # Re-use the existing load and link helpers.
+    if ! _load_package "$pkg_name"; then
+        stderr "Restore failed during load step.";
+        return 1;
+    fi;
+
+    if ! _link_package "$pkg_name"; then
+        stderr "Restore failed during link step.";
+        return 1;
+    fi;
+
+    stderr "Package '$pkg_name' has been restored.";
+    do_status "$pkg_name";
+    return 0;
 }
 
-################################################################################
-#  do_clean <pkg_name>
-################################################################################
-function do_clean() {
-    # Calls: _confirm_action, __remove_row_from_manifest
-    noop;
+#-------------------------------------------------------------------------------
+# @do_clean
+#-------------------------------------------------------------------------------
+do_clean() {
+    local pkg_name="$1";
+    if [[ -z "$pkg_name" ]]; then
+        stderr "Error: clean command requires a package name.";
+        usage;
+        return 1;
+    fi;
+
+    local status;
+    status=$(_get_manifest_field "$pkg_name" "status");
+    if [[ "$status" != "REMOVED" ]]; then
+        stderr "Error: Package '$pkg_name' is not in REMOVED state (current: $status).";
+        return 1;
+    fi;
+
+    local prompt="This will permanently remove '$pkg_name' from the manifest. This cannot be undone. Continue?";
+    if ! _confirm_action "$prompt"; then
+        stderr "Clean operation aborted by user.";
+        return 1;
+    fi;
+
+    if ! __remove_row_from_manifest "$pkg_name"; then
+        stderr "Error: Failed to remove row from manifest.";
+        return 1;
+    fi;
+    
+    stderr "Package '$pkg_name' has been cleaned from the manifest.";
+    return 0;
 }
 
 #-------------------------------------------------------------------------------
