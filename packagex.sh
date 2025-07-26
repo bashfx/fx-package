@@ -23,7 +23,7 @@ readonly ARGS=("${@}");
 # These variables define the core paths and settings.
 readonly APP_NAME="packagex";
 readonly ALIAS_NAME="pkgx";
-readonly SRC_TREE="/home/nulltron/.repos/bashfx/fx-catalog"; # IMPORTANT: User must set this path.
+readonly SRC_TREE="/home/nulltron/.repos/bashfx/fx-catalog";
 readonly TARGET_BASE_DIR="${HOME}/.my";
 readonly TARGET_NAMESPACE="tmp";
 readonly TARGET_LIB_DIR="${TARGET_BASE_DIR}/lib";

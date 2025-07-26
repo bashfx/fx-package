@@ -1,65 +1,95 @@
 #!/usr/bin/env bash
 
 #===============================================================================
-#  warmup.sh - An external test driver for packagex
+#  driver.sh - A "Live File" test driver for packagex
 #
-#  This script creates a temporary test environment and provides selectable
-#  test scenarios to verify the functionality of the packagex script.
+#  This script operates directly on a real source code repository.
+#  It is designed to be safe but requires configuration before use.
 #
 #  Usage:
-#    ./warmup.sh [all|s1|s2]
-#
-#    all - (Default) Runs all test scenarios.
-#    s1  - Runs Scenario 1: Standard Lifecycle.
-#    s2  - Runs Scenario 2: Caching & Preservation Workflow.
-#
+#    ./driver.sh [all|s1|s2]
 #===============================================================================
 
-# --- Configuration ---
-readonly PKG_CMD="./packagex"
-readonly TEST_ROOT="$(pwd)/__pkgx_test_env"
-readonly SRC_TREE="${TEST_ROOT}/src"
+# ---
+# --- ❗ MANDATORY CONFIGURATION ❗
+# ---
+# You MUST set this variable to the absolute path of your BASHFX source repo.
+# The script will NOT run until this is set.
+readonly SRC_TREE="/home/nulltron/.repos/bashfx/fx-catalog"
+
+# A list of all packages that this test script will touch.
+# Used for the automated cleanup routine.
+readonly TEST_PACKAGES=("fx.semver" "util.logger")
+# ---
+# --- END CONFIGURATION ---
+# ---
+
+# --- Read-only paths derived from configuration ---
+readonly SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+readonly PKG_CMD="${SCRIPT_DIR}/packagex.sh"
+
 
 # --- Helper Functions ---
 
 _run_cmd() {
-    printf "\n#===============================================================================\n"
-    printf "# RUNNING: pkgx %s\n" "$*"
-    printf "#===============================================================================\n"
+    echo
+    echo "#==============================================================================="
+    echo "# RUNNING: pkgx $*"
+    echo "#==============================================================================="
     "$PKG_CMD" "$@"
     printf "#---[ EXIT CODE: %d ]---\n" "$?"
     read -p "Press [Enter] to continue..."
 }
 
-_setup_test_env() {
-    printf "--- Setting up test environment in %s ---\n" "$TEST_ROOT"
-    rm -rf "$TEST_ROOT"
-    rm -f ~/.pkg_manifest
-    mkdir -p "${SRC_TREE}/pkgs/fx/semver"
-    mkdir -p "${SRC_TREE}/pkgs/utils/logger"
-    printf "#!/usr/bin/env bash\necho 'Semver v1'\n" > "${SRC_TREE}/pkgs/fx/semver/semver.sh"
-    printf "#!/usr/bin/env bash\n#\n# --- META ---\n#\n# meta:\n#   author: CustomUser\n#   my_custom_field: some_value\n#\n\necho 'Logger v1'\n" > "${SRC_TREE}/pkgs/utils/logger/logger.sh"
+_setup() {
+    echo "--- Setting up test environment ---"
+    
+    # CRITICAL: Validate that the user has configured the SRC_TREE.
+    if [[ ! -d "$SRC_TREE" || "$SRC_TREE" == "" ]]; then
+        echo "!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!"
+        echo "!! ERROR: You must edit driver.sh and set the SRC_TREE      !!"
+        echo "!!        variable to the path of your BASHFX repository.   !!"
+        echo "!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!"
+        exit 1
+    fi
+    
+    # Perform a pre-run cleanup to ensure a clean slate.
+    _cleanup
+    
+    # Modify the packagex script in-place to point to the configured SRC_TREE
     sed -i "s|^readonly SRC_TREE=.*|readonly SRC_TREE=\"${SRC_TREE}\";|" "$PKG_CMD"
     chmod +x "$PKG_CMD"
-    printf "--- Setup Complete ---\n"
+    
+    echo "--- Setup Complete. Testing on live files in: ${SRC_TREE} ---"
 }
 
 _cleanup() {
-    printf "\n--- Cleaning up test environment ---\n"
-    rm -rf "$TEST_ROOT"
+    echo
+    echo "--- Running Cleanup Routine ---"
+
+    if [[ ! -f ~/.pkg_manifest ]]; then
+        echo "Manifest not found, no cleanup needed."
+        return 0
+    fi
+    
+    for pkg in "${TEST_PACKAGES[@]}"; do
+        # We don't care about errors here, just ensuring state is reset.
+        "$PKG_CMD" uninstall "$pkg" &>/dev/null
+        "$PKG_CMD" clean "$pkg" &>/dev/null
+    done
+    
     rm -f ~/.pkg_manifest
+    
+    # Restore the original SRC_TREE line in packagex
     sed -i 's|^readonly SRC_TREE=.*|readonly SRC_TREE=""; # IMPORTANT: User must set this path.|' "$PKG_CMD"
-    printf "--- Cleanup Complete ---\n"
+    echo "--- Cleanup Complete ---"
 }
 
 # --- Test Scenario Functions ---
 
-#-------------------------------------------------------------------------------
-# @test_scenario_1
-# Tests the normalize -> register -> install -> uninstall -> clean cycle.
-#-------------------------------------------------------------------------------
 test_scenario_1() {
     echo "### SCENARIO 1: Testing 'fx.semver' Standard Lifecycle ###"
+    # Note: Assumes fx.semver has no header metadata to start.
     _run_cmd normalize fx.semver
     _run_cmd meta fx.semver
     _run_cmd register fx.semver
@@ -73,12 +103,9 @@ test_scenario_1() {
     _run_cmd clean fx.semver
 }
 
-#-------------------------------------------------------------------------------
-# @test_scenario_2
-# Tests the 'cache' command and preservation of custom metadata.
-#-------------------------------------------------------------------------------
 test_scenario_2() {
     echo "### SCENARIO 2: Testing 'util.logger' Caching & Preservation ###"
+    # Note: Assumes a dummy util.logger/logger.sh exists with custom metadata.
     _run_cmd meta util.logger
     _run_cmd cache util.logger
     _run_cmd status util.logger
@@ -98,19 +125,14 @@ usage() {
 }
 
 main() {
-    # Ensure cleanup happens on any exit
     trap _cleanup EXIT
-    _setup_test_env
+    _setup
 
-    local test_to_run="${1:-all}" # Default to 'all' if no argument is provided
+    local test_to_run="${1:-all}"
 
     case "$test_to_run" in
-        (s1)
-            test_scenario_1
-            ;;
-        (s2)
-            test_scenario_2
-            ;;
+        (s1) test_scenario_1;;
+        (s2) test_scenario_2;;
         (all)
             test_scenario_1
             test_scenario_2
