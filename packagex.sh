@@ -511,9 +511,66 @@ __create_symlink() {
 }
 
 
+#-------------------------------------------------------------------------------
+# @_load_package
+#-------------------------------------------------------------------------------
+_load_package() {
+    local pkg_name="$1";
+    local src_path;
+    local dest_path;
 
-# implement _load_package | Input: pkg_name. Orchestrates copying the file to the lib dir and updating status.
-# implement _link_package | Input: pkg_name. Orchestrates creating the symlink and updating status.
+    stderr "Loading package artifacts...";
+    src_path=$(_get_source_path "$pkg_name");
+    dest_path="${TARGET_LIB_DIR}/${TARGET_NAMESPACE}/$(basename "$src_path")";
+
+    if ! __copy_file "$src_path" "$dest_path"; then
+        stderr "Error: Failed to copy '$src_path' to library.";
+        return 1;
+    fi;
+
+    if ! _update_manifest_field "$pkg_name" "status" "LOADED"; then
+        stderr "Error: Failed to update manifest status to LOADED.";
+        return 1;
+    fi;
+
+    stderr "Package loaded to: $dest_path";
+    return 0;
+}
+
+#-------------------------------------------------------------------------------
+# @_link_package
+#-------------------------------------------------------------------------------
+_link_package() {
+    local pkg_name="$1";
+    local src_path;
+    local lib_path;
+    local link_path;
+    local alias;
+
+    stderr "Linking package executable...";
+    src_path=$(_get_source_path "$pkg_name");
+    alias=$(_get_manifest_field "$pkg_name" "alias");
+    
+    lib_path="${TARGET_LIB_DIR}/${TARGET_NAMESPACE}/$(basename "$src_path")";
+    link_path="${TARGET_BIN_DIR}/${TARGET_NAMESPACE}/${alias}";
+
+    if ! __create_symlink "$lib_path" "$link_path"; then
+        stderr "Error: Failed to create symlink at '$link_path'.";
+        return 1;
+    fi;
+
+    if ! _update_manifest_field "$pkg_name" "status" "INSTALLED"; then
+        stderr "Error: Failed to update manifest status to INSTALLED.";
+        return 1;
+    fi;
+
+    stderr "Package linked to: $link_path";
+    return 0;
+}
+
+
+
+
 # implement _uninstall_package | Input: pkg_name. Orchestrates artifact removal and status updates.
 # implement _confirm_action | Input: prompt_string. A generic helper that prompts the user for [y/N] confirmation.
 
@@ -619,12 +676,56 @@ __get_manifest_header() {
 
 # --- API FUNCTIONS ---
 
-################################################################################
-#  do_install <pkg_name>
-################################################################################
-function do_install() {
-    # Calls: _load_package, _link_package
-    noop;
+#-------------------------------------------------------------------------------
+# @do_install
+#-------------------------------------------------------------------------------
+do_install() {
+    local pkg_name="$1";
+    if [[ -z "$pkg_name" ]]; then
+        stderr "Error: install command requires a package name.";
+        usage;
+        return 1;
+    fi;
+
+    local status;
+    status=$(_get_manifest_field "$pkg_name" "status");
+
+    if [[ -z "$status" ]]; then
+        stderr "Package '$pkg_name' not in manifest. Registering first...";
+        if ! do_register "$pkg_name"; then
+            stderr "Installation failed during registration.";
+            return 1;
+        fi;
+        status=$(_get_manifest_field "$pkg_name" "status");
+    fi;
+
+    if [[ "$status" == "INSTALLED" && "$opt_force" -eq 0 ]]; then
+        stderr "Package '$pkg_name' is already installed. Use -f to force.";
+        return 0;
+    fi;
+
+    if [[ "$status" == "REMOVED" ]]; then
+        stderr "Package '$pkg_name' was previously uninstalled. Use 'restore' to proceed.";
+        return 1;
+    fi;
+
+    # --- Load Step ---
+    if [[ "$status" != "LOADED" ]]; then
+        if ! _load_package "$pkg_name"; then
+            stderr "Installation failed during load step.";
+            return 1;
+        fi;
+    fi;
+
+    # --- Link Step ---
+    if ! _link_package "$pkg_name"; then
+        stderr "Installation failed during link step.";
+        return 1;
+    fi;
+
+    stderr "Installation of '$pkg_name' complete.";
+    do_status "$pkg_name";
+    return 0;
 }
 
 ################################################################################
