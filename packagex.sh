@@ -12,7 +12,7 @@
 #   author: BashFX
 #
 # portable:
-#   sha256sum
+#   sha256sum, git, cp, mkdir, ln, rm
 # builtins:
 #   printf, echo, readonly, local, case, while, shift, declare, awk, grep, sed, sort
 
