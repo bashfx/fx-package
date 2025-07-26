@@ -569,9 +569,33 @@ _link_package() {
 }
 
 
+#-------------------------------------------------------------------------------
+# @_uninstall_package
+#-------------------------------------------------------------------------------
+_uninstall_package() {
+    local pkg_name="$1";
+    local src_path;
+    local lib_path;
+    local link_path;
+    local alias;
+
+    src_path=$(_get_source_path "$pkg_name");
+    alias=$(_get_manifest_field "$pkg_name" "alias");
+    lib_path="${TARGET_LIB_DIR}/${TARGET_NAMESPACE}/$(basename "$src_path")";
+    link_path="${TARGET_BIN_DIR}/${TARGET_NAMESPACE}/${alias}";
+
+    stderr "Removing symlink...";
+    if ! __remove_symlink "$link_path"; then return 1; fi;
+    
+    stderr "Removing library file...";
+    if ! __remove_file "$lib_path"; then return 1; fi;
+
+    _update_manifest_field "$pkg_name" "status" "REMOVED";
+
+    return 0;
+}
 
 
-# implement _uninstall_package | Input: pkg_name. Orchestrates artifact removal and status updates.
 # implement _confirm_action | Input: prompt_string. A generic helper that prompts the user for [y/N] confirmation.
 
 # --- Low-Level Helpers ---
@@ -689,7 +713,27 @@ __remove_symlink() {
 
 
 
-# implement __remove_file | Input: file_path. Atomically removes the specified file.
+#-------------------------------------------------------------------------------
+# @__remove_file
+#-------------------------------------------------------------------------------
+__remove_file() {
+    local path="$1";
+    
+    if [[ -f "$path" ]]; then
+        rm "$path";
+        if [[ $? -ne 0 ]]; then
+            stderr "Error: Failed to remove file: $path";
+            return 1;
+        fi;
+    else
+        stderr "Notice: File not found at $path, nothing to remove.";
+    fi;
+
+    return 0;
+}
+
+
+
 # implement __remove_row_from_manifest | Input: pkg_name. Uses sed to delete the line from the manifest.
 
 
@@ -809,12 +853,33 @@ do_enable() {
     return 0;
 }
 
-################################################################################
-#  do_uninstall <pkg_name>
-################################################################################
-function do_uninstall() {
-    # Calls: _uninstall_package
-    noop;
+#-------------------------------------------------------------------------------
+# @do_uninstall
+#-------------------------------------------------------------------------------
+do_uninstall() {
+    local pkg_name="$1";
+    if [[ -z "$pkg_name" ]]; then
+        stderr "Error: uninstall command requires a package name.";
+        usage;
+        return 1;
+    fi;
+
+    local status;
+    status=$(_get_manifest_field "$pkg_name" "status");
+
+    if [[ "$status" != "INSTALLED" && "$status" != "DISABLED" ]]; then
+        stderr "Error: Package '$pkg_name' cannot be uninstalled. Current state: $status";
+        return 1;
+    fi;
+
+    if ! _uninstall_package "$pkg_name"; then
+        stderr "Uninstall failed.";
+        return 1;
+    fi;
+
+    stderr "Package '$pkg_name' has been uninstalled.";
+    do_status "$pkg_name";
+    return 0;
 }
 
 ################################################################################
