@@ -18,10 +18,12 @@
 
 # --- CONFIGURATION ---
 
+readonly ARGS=("${@}");
+
 # These variables define the core paths and settings.
 readonly APP_NAME="packagex";
 readonly ALIAS_NAME="pkgx";
-readonly SRC_TREE=""; # IMPORTANT: User must set this path.
+readonly SRC_TREE="/home/nulltron/.repos/bashfx/fx-catalog"; # IMPORTANT: User must set this path.
 readonly TARGET_BASE_DIR="${HOME}/.my";
 readonly TARGET_NAMESPACE="tmp";
 readonly TARGET_LIB_DIR="${TARGET_BASE_DIR}/lib";
@@ -50,22 +52,22 @@ DEV_MODE=0;   # Master dev mode toggle
 #  Prints messages to the standard error stream. Obeys QUIET_MODE.
 #
 ################################################################################
-function stderr() {
-    if [[ "$QUIET_MODE" -eq 1 ]]; then
-        return 0;
-    fi;
-    printf "%s\n" "$*" >&2;
+stderr() {
+	if [[ "$QUIET_MODE" -eq 1 ]]; then
+			return 0;
+	fi
+	printf "%s\n" "$*" >&2;
 }
 
 ################################################################################
 #
 #  noop
 #
-#  A no-operation function to use as a placeholder in stubs.
+#  A no-operation to use as a placeholder in stubs.
 #
 ################################################################################
-function noop() {
-    :; # This function intentionally does nothing.
+noop() {
+    :; # This intentionally does nothing.
 }
 
 
@@ -96,35 +98,24 @@ __low_inspect(){
 		| sort;
 }
 
-################################################################################
-#
-#  dev_dispatch
-#
-#  A pre-dispatcher for developer-mode direct function calls.
-#
-################################################################################
-function dev_dispatch() {
-    # This dispatcher only activates if the first argument is '$'
-    if [[ "$1" != '$' ]]; then
-        return 1;
-    fi;
-    shift; # Consume '$'
-
+#-------------------------------------------------------------------------------
+# @dev_dispatch
+#-------------------------------------------------------------------------------
+dev_dispatch() {
+    # This function is now called AFTER the '$' has been consumed by dispatch.
     local func_to_call="$1";
     if [[ -z "$func_to_call" ]]; then
         stderr "Dev Dispatcher: No function specified after '\$'."
         exit 1;
-    fi;
+    fi
     shift; # Consume function name
 
-    # Special case: 'func' command lists available functions
     if [[ "$func_to_call" == "func" ]]; then
         stderr "Available functions:";
         __low_inspect _ __ do_;
         exit 0;
-    fi;
+    fi
 
-    # Check if the requested function exists
     if [[ $(type -t "$func_to_call") == "function" ]]; then
         stderr "--- DEV CALL: $func_to_call $* ---";
         "$func_to_call" "$@";
@@ -136,9 +127,8 @@ function dev_dispatch() {
         stderr "Available functions:";
         __low_inspect _ __ do_;
         exit 1;
-    fi;
+    fi
 }
-
 
 # ------------------------------------------------------------------------------
 #  Implementation Stubs (from PRD Technical Breakdown)
@@ -155,11 +145,11 @@ _resolve_pkg_prefix() {
     # As per PRD, 'utils' directory maps to 'util' prefix.
     case "$pkg_dir_name" in
         (utils)
-            printf "%s" "util";
-            ;;
+					printf "%s" "util";
+					;;
         (*)
-            printf "%s" "$pkg_dir_name";
-            ;;
+					printf "%s" "$pkg_dir_name";
+					;;
     esac
     return 0;
 }
@@ -173,9 +163,9 @@ _gather_package_meta() {
 
     src_path=$(_get_source_path "$pkg_name");
     if [[ ! -r "$src_path" ]]; then
-        stderr "Error: Source path for '$pkg_name' not found: $src_path";
-        return 1;
-    fi;
+			stderr "Error: Source path for '$pkg_name' not found: $src_path";
+			return 1;
+    fi
 
     # Gather all metadata, providing sensible defaults.
     local ver;
@@ -197,7 +187,7 @@ _gather_package_meta() {
     local status="KNOWN";
     if [[ "$ver" == "v0.1.0" || "$alias" == "$(printf "%s" "$pkg_name" | cut -d'.' -f2)" ]]; then
         status="INCOMPLETE";
-    fi;
+    fi
 
     # The order of fields here MUST match the manifest header.
     # pkg_name, status, version, build, alias, path, checksum, deps
@@ -227,7 +217,7 @@ _get_field_index() {
     if [[ -z "$header" ]]; then
         stderr "Error: Could not read manifest header.";
         return 1;
-    fi;
+    fi
 
     # Use awk to find the column number of the field name
     res=$(printf "%s" "$header" | awk -v field="$field_name" '
@@ -237,7 +227,7 @@ _get_field_index() {
 
     if [[ -n "$res" ]]; then
         ret=0;
-    fi;
+    fi
 
     printf "%s" "$res";
     return "$ret";
@@ -259,7 +249,7 @@ _get_manifest_row() {
 
     if [[ -n "$res" ]]; then
         ret=0;
-    fi;
+    fi
 
     printf "%s" "$res";
     return "$ret";
@@ -280,20 +270,20 @@ _get_manifest_field() {
     if [[ -z "$row" ]]; then
         # This is not an error; the package may not be registered yet.
         return 1;
-    fi;
+    fi
 
     index=$(_get_field_index "$field_name");
     if [[ -z "$index" ]]; then
         stderr "Error: Field '$field_name' not found in manifest header.";
         return 1;
-    fi;
+    fi
 
     # Use awk to extract the field by its index
     res=$(printf "%s" "$row" | awk -v idx="$index" -F'\t' '{print $idx}');
 
     if [[ -n "$res" ]]; then
         ret=0;
-    fi;
+    fi
 
     printf "%s" "$res";
     return "$ret";
@@ -304,36 +294,26 @@ _get_manifest_field() {
 #-------------------------------------------------------------------------------
 _get_source_path() {
     local pkg_name="$1";
-    local ret=1;
-    local res="";
-    local prefix;
-    local script_name;
+    local prefix=${pkg_name%%.*};
+    local script_name=${pkg_name#*.};
 
-    # The prefix is the part before the first '.'
-    prefix=$(printf "%s" "$pkg_name" | awk -F'.' '{print $1}');
-    # The script name is the part after the first '.'
-    script_name=$(printf "%s" "$pkg_name" | awk -F'.' '{print $2}');
-
-    if [[ -z "$prefix" || -z "$script_name" ]]; then
+    if [[ "$pkg_name" == "$prefix" || -z "$script_name" ]]; then
         stderr "Error: Invalid package name format: '$pkg_name'. Expected 'prefix.name'.";
         return 1;
-    fi;
+    fi
     
-    # Resolve 'util' to 'utils' for the directory name
     if [[ "$prefix" == "util" ]]; then
         prefix="utils";
-    fi;
+    fi
 
-    res="${SRC_TREE}/pkgs/${prefix}/${script_name}.sh";
-
-    if [[ -f "$res" ]]; then
-        ret=0;
-    fi;
-
+    local res="${SRC_TREE}/pkgs/${prefix}/${script_name}/${script_name}.sh";
     printf "%s" "$res";
-    return "$ret";
+    if [[ -f "$res" ]]; then
+        return 0;
+    else
+        return 1;
+    fi
 }
-
 #-------------------------------------------------------------------------------
 # @_check_git_status
 #-------------------------------------------------------------------------------
@@ -343,12 +323,12 @@ _check_git_status() {
     if ! command -v git &> /dev/null; then
         stderr "Warning: 'git' command not found. Cannot check file status.";
         return 0; # Non-fatal, allow proceeding
-    fi;
+    fi
 
     # Check if the file is in a git repository
     if ! git -C "$(dirname "$path")" rev-parse --is-inside-work-tree &> /dev/null; then
         return 0; # Not a git repo, nothing to check
-    fi;
+    fi
 
     local status;
     status=$(git -C "$(dirname "$path")" status --porcelain -- "$path");
@@ -358,7 +338,7 @@ _check_git_status() {
         stderr "$status";
         stderr "Please commit or stash changes before normalizing.";
         return 1;
-    fi;
+    fi
 
     return 0;
 }
@@ -367,7 +347,7 @@ _check_git_status() {
 # @_build_manifest_row
 #-------------------------------------------------------------------------------
 _build_manifest_row() {
-    # This function takes all manifest fields as arguments in order.
+    # This takes all manifest fields as arguments in order.
     # $1: pkg_name, $2: status, $3: version, $4: build, $5: alias, etc.
     local fields=("$@");
     local row="";
@@ -394,7 +374,7 @@ _update_manifest_field() {
     if [[ -z "$field_index" ]]; then
         stderr "Error: Cannot update. Field '$field_name' not found.";
         return 1;
-    fi;
+    fi
 
     # Use awk for robust, in-place field replacement.
     # This is safer than sed for variable-based column replacement.
@@ -417,33 +397,71 @@ __backup_file() {
         if [[ $? -ne 0 ]]; then
             stderr "Error: Could not create backup directory: $BACKUP_DIR";
             return 1;
-        fi;
-    fi;
+        fi
+    fi
 
     cp -p "$path" "${BACKUP_DIR}/$(basename "$path").orig";
     return $?;
 }
 
 #-------------------------------------------------------------------------------
+# @_get_all_header_meta
+#-------------------------------------------------------------------------------
+_get_all_header_meta() {
+    local path="$1";
+    local -n map_ref="$2"; # Nameref to the associative array
+
+    # Ensure the map is clear before populating
+    map_ref=();
+
+    if [[ ! -r "$path" ]]; then return 1; fi;
+
+    # Read all '# key: value' lines and populate the associative array
+    while read -r line; do
+        if [[ "$line" =~ ^#\s*([a-zA-Z0-9_]+):[[:space:]]*(.*)$ ]]; then
+            local key="${BASH_REMATCH[1]}";
+            local value="${BASH_REMATCH[2]}";
+            map_ref["$key"]="$value";
+        fi;
+    done < <(grep -E "^#\s*[a-zA-Z0-9_]+:" "$path");
+
+    return 0;
+}
+
+#-------------------------------------------------------------------------------
+# @__rewrite_header
+#-------------------------------------------------------------------------------
+__rewrite_header() {
+    local path="$1";
+    local -n data_map_ref="$2"; # Nameref to the data map
+    local header_content;
+
+    # Dynamically build the header from the associative array
+    header_content+="\n#\n# --- META ---\n#\n# meta:\n";
+    for key in $(printf "%s\n" "${!data_map_ref[@]}" | sort); do
+        header_content+=$(printf "#   %s: %s\n" "$key" "${data_map_ref[$key]}");
+    done
+    header_content+="#\n";
+
+    # Atomically find and replace the old META block
+    sed -i "/^# --- META ---$/,/^#\s*$/c\\${header_content}" "$path";
+    return $?;
+}
+
+
+#-------------------------------------------------------------------------------
 # @__inject_header
 #-------------------------------------------------------------------------------
 __inject_header() {
     local path="$1";
+    local ver="$2";
+    local alias="$3";
     local header_content;
 
-    # Using printf for clean multi-line variable assignment.
-    # This defines the standard APP_* variables injected into scripts.
-    printf -v header_content '%s\n' \
-        '' \
-        '# --- AUTO-INJECTED BY packagex ---' \
-        'readonly APP_NAME="%s";' \
-        'readonly APP_ALIAS="%s";' \
-        'readonly APP_VERSION="%s";' \
-        'readonly APP_BUILD="%s";' \
-        '# --- END ---' \
-        '';
-    
-    # Use sed to insert the block of text at line 2 (after the shebang)
+    # This now only injects the absolute minimal stub.
+    printf -v header_content '\n#\n# --- META ---\n#\n# meta:\n#   version: %s\n#   alias: %s\n#\n' \
+        "$ver" "$alias";
+
     sed -i "2r /dev/stdin" "$path" <<< "$header_content";
     return $?;
 }
@@ -460,8 +478,8 @@ __add_row_to_manifest() {
         if [[ $? -ne 0 ]]; then
             stderr "Error: Could not create manifest file: $MANIFEST_PATH";
             return 1;
-        fi;
-    fi;
+        fi
+    fi
 
     printf "%s\n" "$row_string" >> "$MANIFEST_PATH";
     return $?;
@@ -481,8 +499,8 @@ __copy_file() {
         if [[ $? -ne 0 ]]; then
             stderr "Error: Could not create destination directory: $dest_dir";
             return 1;
-        fi;
-    fi;
+        fi
+    fi
 
     cp -p "$src_path" "$dest_path";
     return $?;
@@ -502,8 +520,8 @@ __create_symlink() {
         if [[ $? -ne 0 ]]; then
             stderr "Error: Could not create link directory: $link_dir";
             return 1;
-        fi;
-    fi;
+        fi
+    fi
 
     # -s for symbolic, -f to overwrite if it exists
     ln -sf "$src_path" "$link_path";
@@ -526,12 +544,12 @@ _load_package() {
     if ! __copy_file "$src_path" "$dest_path"; then
         stderr "Error: Failed to copy '$src_path' to library.";
         return 1;
-    fi;
+    fi
 
     if ! _update_manifest_field "$pkg_name" "status" "LOADED"; then
         stderr "Error: Failed to update manifest status to LOADED.";
         return 1;
-    fi;
+    fi
 
     stderr "Package loaded to: $dest_path";
     return 0;
@@ -557,12 +575,12 @@ _link_package() {
     if ! __create_symlink "$lib_path" "$link_path"; then
         stderr "Error: Failed to create symlink at '$link_path'.";
         return 1;
-    fi;
+    fi
 
     if ! _update_manifest_field "$pkg_name" "status" "INSTALLED"; then
         stderr "Error: Failed to update manifest status to INSTALLED.";
         return 1;
-    fi;
+    fi
 
     stderr "Package linked to: $link_path";
     return 0;
@@ -585,10 +603,10 @@ _uninstall_package() {
     link_path="${TARGET_BIN_DIR}/${TARGET_NAMESPACE}/${alias}";
 
     stderr "Removing symlink...";
-    if ! __remove_symlink "$link_path"; then return 1; fi;
+    if ! __remove_symlink "$link_path"; then return 1; fi
     
     stderr "Removing library file...";
-    if ! __remove_file "$lib_path"; then return 1; fi;
+    if ! __remove_file "$lib_path"; then return 1; fi
 
     _update_manifest_field "$pkg_name" "status" "REMOVED";
 
@@ -606,7 +624,7 @@ _confirm_action() {
     # If -y flag is passed, automatically confirm.
     if [[ "$opt_yes" -eq 1 ]]; then
         return 0;
-    fi;
+    fi
 
     read -r -p "$prompt_string [y/N] " answer;
     case "$answer" in
@@ -630,12 +648,12 @@ __get_file_checksum() {
     if [[ ! -r "$path" ]]; then
         stderr "Error: File not found or not readable: $path";
         return 1;
-    fi;
+    fi
 
     res=$(sha256sum "$path" 2>/dev/null | awk '{print $1}');
     if [[ -n "$res" ]]; then
         ret=0;
-    fi;
+    fi
 
     printf "%s" "$res";
     return "$ret";
@@ -655,14 +673,14 @@ __get_header_meta() {
     if [[ ! -r "$path" ]]; then
         stderr "Error: File not found or not readable: $path";
         return 1;
-    fi;
+    fi
 
     # Grep for the key in comments, get the first match, then extract the value.
     res=$(grep -E "^#\s*${key}:" "$path" | head -n 1 | awk -F': ' '{print $2}');
 
     if [[ -n "$res" ]]; then
         ret=0;
-    fi;
+    fi
 
     printf "%s" "$res";
     return "$ret";
@@ -672,16 +690,16 @@ __get_header_meta() {
 # @__read_manifest_file
 #-------------------------------------------------------------------------------
 __read_manifest_file() {
-    # This function populates the global MANIFEST_DATA array.
+    # This populates the global MANIFEST_DATA array.
     # It's memoized; it only reads the file once per script execution.
     if [[ ${#MANIFEST_DATA[@]} -gt 0 ]]; then
         return 0;
-    fi;
+    fi
 
     if [[ ! -r "$MANIFEST_PATH" ]]; then
         # It's not an error for the manifest to not exist yet.
         return 1;
-    fi;
+    fi
 
     # Read the file line by line into the global array.
     mapfile -t MANIFEST_DATA < "$MANIFEST_PATH";
@@ -692,16 +710,16 @@ __read_manifest_file() {
 # @__get_manifest_header
 #-------------------------------------------------------------------------------
 __get_manifest_header() {
-    # This function returns the header line of the manifest.
+    # This returns the header line of the manifest.
     # It's memoized; it only reads the file once.
     if [[ -n "$MANIFEST_HEADER" ]]; then
         printf "%s" "$MANIFEST_HEADER";
         return 0;
-    fi;
+    fi
 
     if [[ ! -r "$MANIFEST_PATH" ]]; then
         return 1;
-    fi;
+    fi
 
     # Read the first line and cache it in a global variable.
     read -r MANIFEST_HEADER < "$MANIFEST_PATH";
@@ -721,11 +739,11 @@ __remove_symlink() {
         if [[ $? -ne 0 ]]; then
             stderr "Error: Failed to remove symlink: $link_path";
             return 1;
-        fi;
+        fi
     else
         # It's not an error if the link is already gone.
         stderr "Notice: Symlink not found at $link_path, nothing to remove.";
-    fi;
+    fi
 
     return 0;
 }
@@ -743,10 +761,10 @@ __remove_file() {
         if [[ $? -ne 0 ]]; then
             stderr "Error: Failed to remove file: $path";
             return 1;
-        fi;
+        fi
     else
         stderr "Notice: File not found at $path, nothing to remove.";
-    fi;
+    fi
 
     return 0;
 }
@@ -775,7 +793,7 @@ do_install() {
         stderr "Error: install command requires a package name.";
         usage;
         return 1;
-    fi;
+    fi
 
     local status;
     status=$(_get_manifest_field "$pkg_name" "status");
@@ -785,33 +803,33 @@ do_install() {
         if ! do_register "$pkg_name"; then
             stderr "Installation failed during registration.";
             return 1;
-        fi;
+        fi
         status=$(_get_manifest_field "$pkg_name" "status");
-    fi;
+    fi
 
     if [[ "$status" == "INSTALLED" && "$opt_force" -eq 0 ]]; then
         stderr "Package '$pkg_name' is already installed. Use -f to force.";
         return 0;
-    fi;
+    fi
 
     if [[ "$status" == "REMOVED" ]]; then
         stderr "Package '$pkg_name' was previously uninstalled. Use 'restore' to proceed.";
         return 1;
-    fi;
+    fi
 
     # --- Load Step ---
     if [[ "$status" != "LOADED" ]]; then
         if ! _load_package "$pkg_name"; then
             stderr "Installation failed during load step.";
             return 1;
-        fi;
-    fi;
+        fi
+    fi
 
     # --- Link Step ---
     if ! _link_package "$pkg_name"; then
         stderr "Installation failed during link step.";
         return 1;
-    fi;
+    fi
 
     stderr "Installation of '$pkg_name' complete.";
     do_status "$pkg_name";
@@ -827,14 +845,14 @@ do_disable() {
         stderr "Error: disable command requires a package name.";
         usage;
         return 1;
-    fi;
+    fi
 
     local status;
     status=$(_get_manifest_field "$pkg_name" "status");
     if [[ "$status" != "INSTALLED" ]]; then
         stderr "Error: Package '$pkg_name' is not in INSTALLED state (current: $status).";
         return 1;
-    fi;
+    fi
 
     local alias;
     alias=$(_get_manifest_field "$pkg_name" "alias");
@@ -842,7 +860,7 @@ do_disable() {
 
     if ! __remove_symlink "$link_path"; then
         return 1;
-    fi;
+    fi
     
     _update_manifest_field "$pkg_name" "status" "DISABLED";
     
@@ -860,20 +878,20 @@ do_enable() {
         stderr "Error: enable command requires a package name.";
         usage;
         return 1;
-    fi;
+    fi
 
     local status;
     status=$(_get_manifest_field "$pkg_name" "status");
     if [[ "$status" != "DISABLED" ]]; then
         stderr "Error: Package '$pkg_name' is not in DISABLED state (current: $status).";
         return 1;
-    fi;
+    fi
     
     # Re-use the existing link helper; it sets status to INSTALLED.
     if ! _link_package "$pkg_name"; then
         stderr "Error: Failed to re-link package.";
         return 1;
-    fi;
+    fi
 
     stderr "Package '$pkg_name' has been enabled.";
     do_status "$pkg_name";
@@ -889,7 +907,7 @@ do_uninstall() {
         stderr "Error: uninstall command requires a package name.";
         usage;
         return 1;
-    fi;
+    fi
 
     local status;
     status=$(_get_manifest_field "$pkg_name" "status");
@@ -897,12 +915,12 @@ do_uninstall() {
     if [[ "$status" != "INSTALLED" && "$status" != "DISABLED" ]]; then
         stderr "Error: Package '$pkg_name' cannot be uninstalled. Current state: $status";
         return 1;
-    fi;
+    fi
 
     if ! _uninstall_package "$pkg_name"; then
         stderr "Uninstall failed.";
         return 1;
-    fi;
+    fi
 
     stderr "Package '$pkg_name' has been uninstalled.";
     do_status "$pkg_name";
@@ -918,14 +936,14 @@ do_restore() {
         stderr "Error: restore command requires a package name.";
         usage;
         return 1;
-    fi;
+    fi
 
     local status;
     status=$(_get_manifest_field "$pkg_name" "status");
     if [[ "$status" != "REMOVED" ]]; then
         stderr "Error: Package '$pkg_name' is not in REMOVED state (current: $status).";
         return 1;
-    fi;
+    fi
 
     stderr "Restoring package from manifest data...";
 
@@ -933,12 +951,12 @@ do_restore() {
     if ! _load_package "$pkg_name"; then
         stderr "Restore failed during load step.";
         return 1;
-    fi;
+    fi
 
     if ! _link_package "$pkg_name"; then
         stderr "Restore failed during link step.";
         return 1;
-    fi;
+    fi
 
     stderr "Package '$pkg_name' has been restored.";
     do_status "$pkg_name";
@@ -954,25 +972,25 @@ do_clean() {
         stderr "Error: clean command requires a package name.";
         usage;
         return 1;
-    fi;
+    fi
 
     local status;
     status=$(_get_manifest_field "$pkg_name" "status");
     if [[ "$status" != "REMOVED" ]]; then
         stderr "Error: Package '$pkg_name' is not in REMOVED state (current: $status).";
         return 1;
-    fi;
+    fi
 
     local prompt="This will permanently remove '$pkg_name' from the manifest. This cannot be undone. Continue?";
     if ! _confirm_action "$prompt"; then
         stderr "Clean operation aborted by user.";
         return 1;
-    fi;
+    fi
 
     if ! __remove_row_from_manifest "$pkg_name"; then
         stderr "Error: Failed to remove row from manifest.";
         return 1;
-    fi;
+    fi
     
     stderr "Package '$pkg_name' has been cleaned from the manifest.";
     return 0;
@@ -989,14 +1007,14 @@ do_status() {
         stderr "Error: status command requires a package name or 'all'.";
         usage;
         return 1;
-    fi;
+    fi
 
     # Ensure manifest data is loaded into memory
     __read_manifest_file;
     if [[ $? -ne 0 ]]; then
         stderr "Notice: Manifest file not found or is empty.";
         return 1;
-    fi;
+    fi
 
     local header;
     header=$(__get_manifest_header);
@@ -1014,8 +1032,8 @@ do_status() {
             ret=0;
         else
             stderr "Error: Package '$pkg_target' not found in manifest.";
-        fi;
-    fi;
+        fi
+    fi
 
     return "$ret";
 }
@@ -1025,124 +1043,141 @@ do_status() {
 #-------------------------------------------------------------------------------
 do_meta() {
     local pkg_name="$1";
-    local ret=1;
-    local src_path;
-
-    if [[ -z "$pkg_name" ]]; then
-        stderr "Error: meta command requires a package name.";
-        usage;
-        return 1;
-    fi;
-
-    src_path=$(_get_source_path "$pkg_name");
+    if [[ -z "$pkg_name" ]]; then usage; return 1; fi;
+    local src_path; src_path=$(_get_source_path "$pkg_name");
     if [[ ! -r "$src_path" ]]; then
         stderr "Error: Source file for '$pkg_name' not found at: $src_path";
         return 1;
     fi;
 
     # Find all '# key: value' pairs in the file and format them.
-    grep -E "^#\s*[a-zA-Z0-9_]+:" "$src_path" \
-        | sed -e 's/^#\s*//' -e 's/:\s*/: /';
-
-    # Check if grep found anything
-    if [[ ${PIPESTATUS[0]} -eq 0 ]]; then
-        ret=0;
-    fi;
+    grep -E "^#\s*[a-zA-Z0-9_]+:" "$src_path" | sed -e 's/^#\s*//' -e 's/:\s*/: /';
     
-    return "$ret";
+    # This command succeeds as long as the file is readable.
+    # It is not an error for a file to have no metadata.
+    return 0;
 }
+
+
 #-------------------------------------------------------------------------------
 # @do_normalize
 #-------------------------------------------------------------------------------
 do_normalize() {
     local pkg_name="$1";
-    local src_path;
-
-    if [[ -z "$pkg_name" ]]; then
-        stderr "Error: normalize command requires a package name.";
-        usage;
-        return 1;
-    fi;
-
-    src_path=$(_get_source_path "$pkg_name");
+    if [[ -z "$pkg_name" ]]; then usage; return 1; fi;
+    local src_path; src_path=$(_get_source_path "$pkg_name");
     if [[ ! -w "$src_path" ]]; then
         stderr "Error: Source file for '$pkg_name' not found or not writable: $src_path";
         return 1;
     fi;
-
     if [[ "$opt_force" -eq 0 ]]; then
-        if ! _check_git_status "$src_path"; then
-            return 1;
-        fi;
+        if ! _check_git_status "$src_path"; then return 1; fi;
     fi;
 
     stderr "Backing up original file...";
-    if ! __backup_file "$src_path"; then
-        stderr "Error: Failed to back up file.";
-        return 1;
-    fi;
+    if ! __backup_file "$src_path"; then return 1; fi;
 
-    stderr "Injecting standard header...";
-    if ! __inject_header "$src_path"; then
+    # Gather default values to inject.
+    local ver="v0.1.0";
+    local alias=${pkg_name#*.};
+
+    stderr "Injecting standard metadata header...";
+    if ! __inject_header "$src_path" "$ver" "$alias"; then
         stderr "Error: Failed to inject header.";
-        # Consider a restore step here in the future.
         return 1;
     fi;
-
     stderr "Normalization complete for '$pkg_name'.";
     return 0;
 }
+
+#-------------------------------------------------------------------------------
+# @do_cache
+#-------------------------------------------------------------------------------
+do_cache() {
+    local pkg_name="$1";
+    if [[ -z "$pkg_name" ]]; then usage; return 1; fi;
+    
+    local src_path; src_path=$(_get_source_path "$pkg_name");
+    
+    stderr "Caching header metadata for '$pkg_name'...";
+    declare -A header_map;
+    _get_all_header_meta "$src_path" header_map;
+    if [[ ${#header_map[@]} -eq 0 ]]; then
+        stderr "Warning: No metadata found in header for '$pkg_name'. Caching empty record.";
+    fi;
+    
+    # Build a partial manifest row from whatever is in the header
+    # Fields: pkg_name, status, version, build, alias, path, checksum, deps
+    local partial_data=("${pkg_name}" "INCOMPLETE" "${header_map[version]:-n/a}" "n/a" "${header_map[alias]:-n/a}" "n/a" "n/a" "${header_map[deps]:-n/a}");
+    
+    local new_row; new_row=$(_build_manifest_row "${partial_data[@]}");
+    local existing_row; existing_row=$(_get_manifest_row "$pkg_name");
+
+    if [[ -n "$existing_row" ]]; then
+        stderr "Updating existing cached entry in manifest...";
+        sed -i "s|^${pkg_name}\t.*|${new_row//&/\\&}|" "$MANIFEST_PATH";
+    else
+        stderr "Adding new cached entry to manifest...";
+        __add_row_to_manifest "$new_row";
+    fi;
+
+    stderr "Caching complete.";
+    do_status "$pkg_name";
+    return 0;
+}
+
 
 #-------------------------------------------------------------------------------
 # @do_register
 #-------------------------------------------------------------------------------
 do_register() {
     local pkg_name="$1";
-    local meta_data;
-
-    if [[ -z "$pkg_name" ]]; then
-        stderr "Error: register command requires a package name.";
-        usage;
-        return 1;
-    fi;
+    if [[ -z "$pkg_name" ]]; then usage; return 1; fi;
     
-    stderr "Gathering metadata for '$pkg_name'...";
-    meta_data=$(_gather_package_meta "$pkg_name");
-    if [[ $? -ne 0 ]]; then
-        # _gather_package_meta prints its own errors
-        return 1;
-    fi;
+    local src_path; src_path=$(_get_source_path "$pkg_name");
     
-    local new_row;
-    new_row=$(_build_manifest_row $meta_data);
+    # --- The Read-Modify-Write Process ---
+    declare -A meta_map;
+    _get_all_header_meta "$src_path" meta_map;
 
-    local existing_row;
-    existing_row=$(_get_manifest_row "$pkg_name");
+    stderr "Gathering package data...";
+    local PkgxDataStr; PkgxDataStr=$(_gather_package_meta "$pkg_name");
+    if [[ -z "$PkgxDataStr" ]]; then return 1; fi;
+    
+    local PkgxFields=("pkg_name" "status" "version" "build" "alias" "path" "checksum" "deps");
+    local PkgxDataArr=($PkgxDataStr);
+
+    for i in "${!PkgxFields[@]}"; do
+        meta_map[${PkgxFields[$i]}]="${PkgxDataArr[$i]}";
+    done
+    
+    local new_row; new_row=$(_build_manifest_row "${PkgxDataArr[@]}");
+    local existing_row; existing_row=$(_get_manifest_row "$pkg_name");
 
     if [[ -n "$existing_row" ]]; then
         stderr "Updating existing entry in manifest...";
-        # Use sed to replace the existing line. The & is escaped to handle paths.
         sed -i "s|^${pkg_name}\t.*|${new_row//&/\\&}|" "$MANIFEST_PATH";
     else
         stderr "Adding new entry to manifest...";
         __add_row_to_manifest "$new_row";
     fi;
-    
-    if [[ $? -eq 0 ]]; then
-        stderr "Registration complete.";
-        do_status "$pkg_name"; # Show the result
-    else
-        stderr "Error: Failed to write to manifest.";
-        return 1;
-    fi;
+    if [[ $? -ne 0 ]]; then stderr "Error: Failed to write to manifest."; return 1; fi;
 
+    stderr "Enriching source file header...";
+    if ! __rewrite_header "$src_path" meta_map; then
+        stderr "Warning: Failed to enrich source file header. Manifest is updated.";
+    fi;
+    
+    stderr "Registration complete.";
+    do_status "$pkg_name";
     return 0;
 }
+
 
 ################################################################################
 #  do_update <pkg_name>
 ################################################################################
-function do_update() {
+do_update() {
     # Calls: (TBD, likely checksum comparison and copy logic)
     noop;
 }
@@ -1150,7 +1185,7 @@ function do_update() {
 ################################################################################
 #  do_checksum <pkg_name>
 ################################################################################
-function do_checksum() {
+do_checksum() {
     # Calls: (TBD, likely checksum comparison logic)
     noop;
 }
@@ -1159,10 +1194,10 @@ function do_checksum() {
 #
 #  driver
 #
-#  A dedicated function for simple, ad-hoc tests. Not for production.
+#  A dedicated for simple, ad-hoc tests. Not for production.
 #
 ################################################################################
-function driver() {
+driver() {
     stderr "--- RUNNING DRIVER ---";
     # Add simple test calls here
     noop;
@@ -1170,16 +1205,10 @@ function driver() {
 }
 
 
-# --- CORE FUNCTIONS ---
-
-################################################################################
-#
-#  usage
-#
-#  Displays the help text for the script.
-#
-################################################################################
-function usage() {
+#-------------------------------------------------------------------------------
+# @usage
+#-------------------------------------------------------------------------------
+usage() {
     printf "Usage: %s <command> [options] [arguments]\n" "$APP_NAME";
     printf "\n";
     printf "  A utility to manage local bash scripts.\n";
@@ -1191,6 +1220,7 @@ function usage() {
     printf "  disable <pkg>     Disable an installed package (unlinks).\n";
     printf "  status <pkg|all>  Check the status of package(s).\n";
     printf "  meta <pkg>        Read a script's header metadata.\n";
+    printf "  cache <pkg>       Cache header metadata to the manifest.\n"; # New command
     printf "  normalize <pkg>   Inject standard header into a source script.\n";
     printf "  register <pkg>    Add/update a package's entry in the manifest.\n";
     printf "  restore <pkg>     Re-install a package marked as REMOVED.\n";
@@ -1201,102 +1231,74 @@ function usage() {
     return 0;
 }
 
-
 #-------------------------------------------------------------------------------
 # @options
 #-------------------------------------------------------------------------------
 options() {
-    # Set option defaults
-    opt_debug=0;
-    opt_trace=0;
-    opt_quiet=0;
-    opt_force=0;
-    opt_yes=0;
-    opt_dev=0;
-
-    while getopts ":dtqfyD" opt; do
+    # Add new opt_from_header variable
+    opt_from_header=0;
+    while getopts ":dtqfyDH" opt; do
         case $opt in
             (d) opt_debug=1;;
-            (t) opt_trace=1; opt_debug=1;; # Trace implies debug
+            (t) opt_trace=1; opt_debug=1;;
             (q) QUIET_MODE=1; opt_quiet=1;;
             (f) opt_force=1;;
             (y) opt_yes=1;;
-            (D) DEV_MODE=1; opt_dev=1; opt_debug=1; opt_trace=1;; # Dev implies all verbosity
-            \?)
-                stderr "Error: Invalid option: -$OPTARG" >&2;
-                usage;
-                return 1;
-                ;;
+            (D) DEV_MODE=1; opt_dev=1; opt_debug=1; opt_trace=1;;
+            (H) opt_from_header=1;; # New flag
+            \?) stderr "Error: Invalid option: -$OPTARG" >&2; usage; return 1;;
         esac
     done;
-
-    # Shift away the parsed options
-    shift $((OPTIND - 1));
     return 0;
 }
 
-################################################################################
-#
-#  dispatch
-#
-#  Routes commands to the appropriate 'do_*' functions.
-#
-################################################################################
-function dispatch() {
+#-------------------------------------------------------------------------------
+# @dispatch
+#-------------------------------------------------------------------------------
+dispatch() {
     local cmd="$1";
-    if [[ -z "$cmd" ]]; then
-        usage;
-        return 1;
-    fi;
+    if [[ -z "$cmd" ]]; then usage; return 1; fi;
     shift;
 
     case "$cmd" in
-        (install)     do_install "$@";;
-        (uninstall)   do_uninstall "$@";;
-        (enable)      do_enable "$@";;
-        (disable)     do_disable "$@";;
-        (status)      do_status "$@";;
-        (meta)        do_meta "$@";;
-        (normalize)   do_normalize "$@";;
-        (register)    do_register "$@";;
-        (restore)     do_restore "$@";;
-        (clean)       do_clean "$@";;
-        (update)      do_update "$@";;
-        (checksum)    do_checksum "$@";;
-        (driver)      driver "$@";; # Internal test driver
+        (\#)
+            dev_dispatch "$@";
+            exit $?;
+            ;;
+        # Add the new 'cache' command to the dispatch list
+        (install|uninstall|enable|disable|status|meta|normalize|register|restore|clean|update|checksum|cache)
+            "do_${cmd}" "$@"
+            ;;
+        (driver)
+            do_driver "$@";
+            ;;
         (*)
-            printf "Error: Unknown command '%s'\n\n" "$cmd";
+            stderr "Error: Unknown command '$cmd'";
             usage;
             return 1;
             ;;
     esac;
 }
 
-
-################################################################################
-#
-#  main
-#
-#  The main entrypoint for the script.
-#
-################################################################################
-function main() {
-    # First, parse all command-line options.
+#-------------------------------------------------------------------------------
+# @main
+#-------------------------------------------------------------------------------
+main() {
     options "$@";
 
-    # If in DEV_MODE, attempt to use the dev dispatcher first.
-    # The dev_dispatch function will exit the script if it successfully
-    # handles the command (i.e., if the first arg is '$').
-    if [[ "$DEV_MODE" -eq 1 ]]; then
-        dev_dispatch "$@";
-    fi;
+    # Create a new array containing only the non-option arguments.
+    local shifted_args=("${@:$OPTIND}");
 
-    # If not in dev mode, or if the dev dispatcher didn't activate,
-    # proceed with the normal command dispatch.
-    local cmd_and_args=("$@");
-    dispatch "${cmd_and_args[@]}";
+    # Check for the '$' pre-dispatch invoker.
+    if [[ "${shifted_args[0]}" == '$' ]]; then
+        # If found, call dev_dispatch with the rest of the arguments and exit.
+        dev_dispatch "${shifted_args[@]:1}";
+        exit $?;
+    fi
+
+    # If no pre-dispatch invoker was found, proceed with normal dispatch.
+    dispatch "${shifted_args[@]}";
 }
-
 
 # --- MAIN INVOCATION ---
 
