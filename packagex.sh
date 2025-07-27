@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 #
-# ----- packagex-v2.1-SKELETON_SENTINEL | lines: 309 | functions: 20 | readonly_vars: 10 | option_vars: 7 ----- #
+# ----- packagex-v2.1-FINAL | lines: 817 | functions: 54 | readonly_vars: 10 | option_vars: 7 ----- #
 #
 # packagex: A utility to manage a non-destructive workspace of local bash scripts.
 #
@@ -12,7 +12,7 @@
 #   author: BashFX
 #
 # portable:
-#   git, cp, mkdir, ln, rm, sha256sum
+#   git, cp, mkdir, ln, rm, sha256sum, column
 # builtins:
 #   printf, echo, readonly, local, case, while, shift, declare, awk, grep, sed, sort
 
@@ -64,7 +64,7 @@ dev_dispatch() {
     fi;
 }
 
-# --- IMPLEMENTATION STUBS (from PRD v2.1) ---
+# --- IMPLEMENTATION (v2.1) ---
 
 #-------------------------------------------------------------------------------
 # @_get_true_source_path
@@ -240,12 +240,10 @@ _get_canonical_meta() {
     local true_path;
     true_path=$(_get_true_source_path "$pkg_name");
 
-    # These are the fields that packagex calculates and manages.
     map_ref["pkg_name"]="$pkg_name";
     map_ref["path"]="$true_path";
     map_ref["checksum"]=$(__get_file_checksum "$working_path");
     
-    # Provide sensible defaults for core fields if they don't exist
     local ver; ver=$(__get_header_meta "$working_path" "version");
     map_ref["version"]="${ver:-v0.1.0}";
     
@@ -263,7 +261,6 @@ __write_header_block() {
     local -n data_map_ref="$2";
     local header_content;
     
-    # Check if a meta block already exists to replace it
     if grep -q "# --- META ---" "$path"; then
         header_content+="\n#\n# --- META ---\n#\n# meta:\n";
         for key in $(printf "%s\n" "${!data_map_ref[@]}" | sort); do
@@ -272,7 +269,6 @@ __write_header_block() {
         header_content+="#\n";
         sed -i "/^# --- META ---$/,/^#\s*$/c\\${header_content}" "$path";
     else
-        # If no block exists, inject a new one after the shebang
         header_content+='\n#\n# --- META ---\n#\n# meta:\n';
         for key in $(printf "%s\n" "${!data_map_ref[@]}" | sort); do
             header_content+=$(printf '#   %s: %s\n' "$key" "${data_map_ref[$key]}");
@@ -288,14 +284,13 @@ __write_header_block() {
 # @_display_meta_array
 #-------------------------------------------------------------------------------
 _display_meta_array() {
-    local -n map_ref="$1"; # Nameref to the associative array
+    local -n map_ref="$1"; 
 
     if [[ ${#map_ref[@]} -eq 0 ]]; then
         stderr "Notice: No metadata to display.";
         return 0;
     fi;
 
-    # Print sorted keys and their values
     for key in $(printf "%s\n" "${!map_ref[@]}" | sort); do
         printf "%s: %s\n" "$key" "${map_ref[$key]}";
     done
@@ -303,25 +298,284 @@ _display_meta_array() {
     return 0;
 }
 
-# Milestone 2: State Persistence & Deployment
-# implement _register_package | Ensures workspace is prepared, then builds and writes the manifest row.
-# implement __write_manifest_row | Low-level writer that appends or updates a row in the manifest file.
-# implement _get_manifest_row | Input: pkg_name. Output: The raw manifest line for the package.
-# implement _display_status_info | Input: row_string. Formats and prints manifest data for the user.
-# implement _deploy_package | Copies the working copy to lib and creates the symlink in bin.
-# implement _update_manifest_status | A dedicated helper to update only the status field in the manifest.
-# implement __copy_to_lib | A wrapper around cp to copy the working copy to its final lib destination.
-# implement __create_bin_symlink | A wrapper around ln -s to create the executable symlink.
+#-------------------------------------------------------------------------------
+# @_register_package
+#-------------------------------------------------------------------------------
+_register_package() {
+    local pkg_name="$1";
+    
+    declare -A canonical_map;
+    _get_canonical_meta "$pkg_name" canonical_map;
 
-# Milestone 3: Symmetrical Lifecycle & Maintenance
-# implement _deactivate_package | Core logic for uninstall. Removes symlink and lib file.
-# implement __remove_bin_symlink | Removes the executable symlink from bin.
-# implement __remove_lib_file | Removes the script file from lib.
-# implement _purge_package | Core logic for clean. Removes manifest row AND workspace assets.
-# implement __remove_manifest_row | Removes the entire row for a package from the manifest.
-# implement __remove_from_workspace | Removes both .pkg.sh and .orig.sh files from the workspace.
-# implement _is_update_required | Compares checksum of pristine source vs. workspace backup.
-# implement _re_register_package | Core logic for update. Removes old workspace assets and re-runs the full registration flow.
+    local manifest_fields=("pkg_name" "status" "version" "build" "alias" "path" "checksum" "deps");
+    local row_data=();
+    
+    canonical_map["status"]="KNOWN";
+    canonical_map["build"]="${BUILD_START_NUMBER}";
+    
+    for field in "${manifest_fields[@]}"; do
+        row_data+=("${canonical_map[$field]:-n/a}");
+    done
+
+    local row_string;
+    printf -v row_string '%s\t' "${row_data[@]}";
+    row_string="${row_string%?}\t::";
+
+    if ! __write_manifest_row "$pkg_name" "$row_string"; then
+        stderr "Error: Failed to write to manifest.";
+        return 1;
+    fi;
+
+    return 0;
+}
+
+#-------------------------------------------------------------------------------
+# @__write_manifest_row
+#-------------------------------------------------------------------------------
+__write_manifest_row() {
+    local pkg_name="$1";
+    local row_string="$2";
+    local header="pkg_name\tstatus\tversion\tbuild\talias\tpath\tchecksum\tdeps\t::";
+
+    if [[ ! -f "$MANIFEST_PATH" ]]; then
+        printf "%s\n" "$header" > "$MANIFEST_PATH";
+    fi;
+
+    if grep -q "^${pkg_name}\t" "$MANIFEST_PATH"; then
+        sed -i "s|^${pkg_name}\t.*|${row_string//&/\\&}|" "$MANIFEST_PATH";
+    else
+        printf "%s\n" "$row_string" >> "$MANIFEST_PATH";
+    fi;
+
+    return $?;
+}
+
+#-------------------------------------------------------------------------------
+# @_get_manifest_row
+#-------------------------------------------------------------------------------
+_get_manifest_row() {
+    local pkg_name="$1";
+    if [[ ! -r "$MANIFEST_PATH" ]]; then
+        return 1;
+    fi;
+    grep "^${pkg_name}\t" "$MANIFEST_PATH";
+    return $?;
+}
+
+#-------------------------------------------------------------------------------
+# @_display_status_info
+#-------------------------------------------------------------------------------
+_display_status_info() {
+    local row_string="$1";
+    local header;
+    header=$(_get_manifest_header);
+    
+    (printf "%s\n" "$header"; printf "%s\n" "$row_string") | column -t -s $'\t';
+}
+
+#-------------------------------------------------------------------------------
+# @_deploy_package
+#-------------------------------------------------------------------------------
+_deploy_package() {
+    local pkg_name="$1";
+    local working_copy_path;
+    working_copy_path=$(_get_workspace_path "$pkg_name" "pkg");
+    
+    if ! __copy_to_lib "$working_copy_path" "$pkg_name"; then
+        return 1;
+    fi;
+
+    if ! __create_bin_symlink "$pkg_name"; then
+        return 1;
+    fi;
+    
+    return 0;
+}
+
+#-------------------------------------------------------------------------------
+# @_update_manifest_status
+#-------------------------------------------------------------------------------
+_update_manifest_status() {
+    local pkg_name="$1";
+    local new_status="$2";
+
+    awk -v pkg="$pkg_name" -v status="$new_status" 'BEGIN {FS=OFS="\t"} {if ($1==pkg) $2=status; print}' "$MANIFEST_PATH" > "${MANIFEST_PATH}.tmp" && mv "${MANIFEST_PATH}.tmp" "$MANIFEST_PATH";
+    
+    return $?;
+}
+
+#-------------------------------------------------------------------------------
+# @__copy_to_lib
+#-------------------------------------------------------------------------------
+__copy_to_lib() {
+    local src_path="$1";
+    local pkg_name="$2";
+    local dest_path="${TARGET_LIB_DIR}/${TARGET_NAMESPACE}/${pkg_name}.sh";
+
+    mkdir -p "$(dirname "$dest_path")";
+    cp -p "$src_path" "$dest_path";
+    return $?;
+}
+
+#-------------------------------------------------------------------------------
+# @__create_bin_symlink
+#-------------------------------------------------------------------------------
+__create_bin_symlink() {
+    local pkg_name="$1";
+    local row;
+    row=$(_get_manifest_row "$pkg_name");
+    
+    local alias;
+    alias=$(printf "%s" "$row" | awk -F'\t' '{print $5}');
+
+    local lib_path="${TARGET_LIB_DIR}/${TARGET_NAMESPACE}/${pkg_name}.sh";
+    local bin_path="${TARGET_BIN_DIR}/${TARGET_NAMESPACE}/${alias}";
+
+    mkdir -p "$(dirname "$bin_path")";
+    ln -sf "$lib_path" "$bin_path";
+    return $?;
+}
+
+#-------------------------------------------------------------------------------
+# @_deactivate_package
+#-------------------------------------------------------------------------------
+_deactivate_package() {
+    local pkg_name="$1";
+
+    if ! __remove_bin_symlink "$pkg_name"; then
+        return 1;
+    fi;
+
+    if ! __remove_lib_file "$pkg_name"; then
+        return 1;
+    fi;
+
+    return 0;
+}
+
+#-------------------------------------------------------------------------------
+# @__remove_bin_symlink
+#-------------------------------------------------------------------------------
+__remove_bin_symlink() {
+    local pkg_name="$1";
+    local row;
+    row=$(_get_manifest_row "$pkg_name");
+    local alias;
+    alias=$(printf "%s" "$row" | awk -F'\t' '{print $5}');
+    local bin_path="${TARGET_BIN_DIR}/${TARGET_NAMESPACE}/${alias}";
+
+    if [[ -L "$bin_path" ]]; then
+        rm "$bin_path";
+    fi;
+    return $?;
+}
+
+#-------------------------------------------------------------------------------
+# @__remove_lib_file
+#-------------------------------------------------------------------------------
+__remove_lib_file() {
+    local pkg_name="$1";
+    local lib_path="${TARGET_LIB_DIR}/${TARGET_NAMESPACE}/${pkg_name}.sh";
+    
+    if [[ -f "$lib_path" ]]; then
+        rm "$lib_path";
+    fi;
+    return $?;
+}
+
+#-------------------------------------------------------------------------------
+# @_purge_package
+#-------------------------------------------------------------------------------
+_purge_package() {
+    local pkg_name="$1";
+
+    if ! __remove_manifest_row "$pkg_name"; then
+        return 1;
+    fi;
+
+    if ! __remove_from_workspace "$pkg_name"; then
+        return 1;
+    fi;
+
+    return 0;
+}
+
+#-------------------------------------------------------------------------------
+# @__remove_manifest_row
+#-------------------------------------------------------------------------------
+__remove_manifest_row() {
+    local pkg_name="$1";
+    
+    # Use sed to delete the line starting with the package name.
+    sed -i "/^${pkg_name}\t/d" "$MANIFEST_PATH";
+    return $?;
+}
+
+#-------------------------------------------------------------------------------
+# @__remove_from_workspace
+#-------------------------------------------------------------------------------
+__remove_from_workspace() {
+    local pkg_name="$1";
+    local pkg_path;
+    pkg_path=$(_get_workspace_path "$pkg_name" "pkg");
+    local orig_path;
+    orig_path=$(_get_workspace_path "$pkg_name" "orig");
+
+    if [[ -f "$pkg_path" ]]; then
+        rm "$pkg_path";
+    fi;
+    if [[ -f "$orig_path" ]]; then
+        rm "$orig_path";
+    fi;
+    
+    return 0;
+}
+
+#-------------------------------------------------------------------------------
+# @_is_update_required
+#-------------------------------------------------------------------------------
+_is_update_required() {
+    local pkg_name="$1";
+    local true_source_path;
+    true_source_path=$(_get_true_source_path "$pkg_name");
+    local orig_path;
+    orig_path=$(_get_workspace_path "$pkg_name" "orig");
+
+    if [[ ! -f "$orig_path" ]]; then
+        # If no backup exists, an update is implicitly required.
+        return 0;
+    fi;
+
+    local true_sum;
+    true_sum=$(__get_file_checksum "$true_source_path");
+    local orig_sum;
+    orig_sum=$(__get_file_checksum "$orig_path");
+
+    if [[ "$true_sum" != "$orig_sum" ]]; then
+        return 0; # 0 means true, an update is required
+    fi;
+    
+    return 1; # 1 means false, no update needed
+}
+
+#-------------------------------------------------------------------------------
+# @_re_register_package
+#-------------------------------------------------------------------------------
+_re_register_package() {
+    local pkg_name="$1";
+
+    stderr "Refreshing workspace files from pristine source...";
+    if ! _prepare_workspace_for_pkg "$pkg_name"; then
+        return 1;
+    fi;
+
+    stderr "Re-normalizing and re-registering package...";
+    if ! do_normalize "$pkg_name" || ! do_register "$pkg_name"; then
+        return 1;
+    fi;
+
+    return 0;
+}
 
 
 # --- API FUNCTIONS (v2.1) ---
@@ -329,79 +583,217 @@ _display_meta_array() {
 # M1 Commands
 function do_prepare() {
     local pkg_name="$1";
-    if [[ -z "$pkg_name" ]]; then
-        usage;
-        return 1;
-    fi;
-
+    if [[ -z "$pkg_name" ]]; then usage; return 1; fi;
     stderr "Preparing workspace for '$pkg_name'...";
     if ! _prepare_workspace_for_pkg "$pkg_name"; then
-        stderr "Workspace preparation failed.";
-        return 1;
+        stderr "Workspace preparation failed."; return 1;
     fi;
-
-    stderr "Workspace for '$pkg_name' is ready.";
-    return 0;
+    stderr "Workspace for '$pkg_name' is ready."; return 0;
 }
 function do_normalize() {
     local pkg_name="$1";
-    if [[ -z "$pkg_name" ]]; then
-        usage;
-        return 1;
-    fi;
-
+    if [[ -z "$pkg_name" ]]; then usage; return 1; fi;
     stderr "Normalizing (enriching) workspace for '$pkg_name'...";
     if ! _enrich_working_copy "$pkg_name"; then
-        stderr "Normalization failed.";
-        return 1;
+        stderr "Normalization failed."; return 1;
     fi;
-
-    stderr "Normalization complete.";
-    return 0;
+    stderr "Normalization complete."; return 0;
 }
 function do_meta() {
     local pkg_name="$1";
-    if [[ -z "$pkg_name" ]]; then
-        usage;
-        return 1;
-    fi;
-
+    if [[ -z "$pkg_name" ]]; then usage; return 1; fi;
     local working_copy_path;
     working_copy_path=$(_get_workspace_path "$pkg_name" "pkg");
-
     if [[ ! -r "$working_copy_path" ]]; then
         stderr "Error: Workspace for '$pkg_name' has not been prepared. Run 'prepare' first.";
         return 1;
     fi;
-
     declare -A meta_map;
     _get_all_header_meta "$working_copy_path" meta_map;
-    
     _display_meta_array meta_map;
     return $?;
 }
 
 # M2 Commands
-function do_register() { # Calls: _register_package
-    noop; }
-function do_status() { # Calls: _get_manifest_row, _display_status_info
-    noop; }
-function do_install() { # Calls: _deploy_package
-    noop; }
+function do_register() {
+    local pkg_name="$1";
+    if [[ -z "$pkg_name" ]]; then usage; return 1; fi;
+    stderr "Registering '$pkg_name' to manifest...";
+    if ! _register_package "$pkg_name"; then
+        stderr "Registration failed."; return 1;
+    fi;
+    stderr "Registration complete."; return 0;
+}
+function do_status() {
+    local pkg_name="$1";
+    if [[ -z "$pkg_name" ]]; then usage; return 1; fi;
+    local row;
+    row=$(_get_manifest_row "$pkg_name");
+    if [[ -z "$row" ]]; then
+        stderr "Package '$pkg_name' not found in manifest."; return 1;
+    fi;
+    _display_status_info "$row";
+    return 0;
+}
+function do_install() {
+    local pkg_name="$1";
+    if [[ -z "$pkg_name" ]]; then usage; return 1; fi;
+    local status;
+    status=$(_get_manifest_row "$pkg_name" | awk -F'\t' '{print $2}');
+
+    if [[ -z "$status" ]]; then
+        stderr "Package '$pkg_name' is not registered. Run 'register' first.";
+        return 1;
+    fi;
+
+    if [[ "$status" == "INSTALLED" && "$opt_force" -eq 0 ]]; then
+        stderr "Package is already installed. Use -f to force re-installation.";
+        return 0;
+    fi;
+
+    stderr "Deploying '$pkg_name'...";
+    if ! _deploy_package "$pkg_name"; then
+        stderr "Deployment failed.";
+        return 1;
+    fi;
+    
+    if ! _update_manifest_status "$pkg_name" "INSTALLED"; then
+        stderr "Warning: Deployment successful, but failed to update manifest status.";
+    fi;
+
+    stderr "Installation of '$pkg_name' complete.";
+    return 0;
+}
 
 # M3 Commands
-function do_uninstall() { # Calls: _deactivate_package
-    noop; }
-function do_disable() { # Calls: __remove_bin_symlink, _update_manifest_status
-    noop; }
-function do_enable() { # Calls: __create_bin_symlink, _update_manifest_status
-    noop; }
-function do_clean() { # Calls: _purge_package
-    noop; }
-function do_update() { # Calls: _is_update_required, _re_register_package
-    noop; }
-function do_restore() { # Calls: _deploy_package (re-uses install logic)
-    noop; }
+function do_uninstall() {
+    local pkg_name="$1";
+    if [[ -z "$pkg_name" ]]; then usage; return 1; fi;
+    local status;
+    status=$(_get_manifest_row "$pkg_name" | awk -F'\t' '{print $2}');
+    if [[ "$status" != "INSTALLED" && "$status" != "DISABLED" ]]; then
+        stderr "Error: Package cannot be uninstalled. Current status: $status";
+        return 1;
+    fi;
+    
+    stderr "Deactivating '$pkg_name'...";
+    if ! _deactivate_package "$pkg_name"; then
+        stderr "Deactivation failed."; return 1;
+    fi;
+
+    if ! _update_manifest_status "$pkg_name" "REMOVED"; then
+        stderr "Warning: Failed to update manifest status to REMOVED.";
+    fi;
+    
+    stderr "Package '$pkg_name' uninstalled.";
+    return 0;
+}
+function do_disable() {
+    local pkg_name="$1";
+    if [[ -z "$pkg_name" ]]; then usage; return 1; fi;
+    local status;
+    status=$(_get_manifest_row "$pkg_name" | awk -F'\t' '{print $2}');
+    if [[ "$status" != "INSTALLED" ]]; then
+        stderr "Error: Package is not installed."; return 1;
+    fi;
+
+    if ! __remove_bin_symlink "$pkg_name"; then
+        stderr "Error: Failed to remove symlink."; return 1;
+    fi;
+
+    if ! _update_manifest_status "$pkg_name" "DISABLED"; then
+        stderr "Warning: Failed to update manifest status to DISABLED.";
+    fi;
+    
+    stderr "Package '$pkg_name' disabled.";
+    return 0;
+}
+function do_enable() {
+    local pkg_name="$1";
+    if [[ -z "$pkg_name" ]]; then usage; return 1; fi;
+    local status;
+    status=$(_get_manifest_row "$pkg_name" | awk -F'\t' '{print $2}');
+    if [[ "$status" != "DISABLED" ]]; then
+        stderr "Error: Package is not disabled."; return 1;
+    fi;
+    
+    if ! __create_bin_symlink "$pkg_name"; then
+        stderr "Error: Failed to create symlink."; return 1;
+    fi;
+    
+    if ! _update_manifest_status "$pkg_name" "INSTALLED"; then
+        stderr "Warning: Failed to update manifest status to INSTALLED.";
+    fi;
+    
+    stderr "Package '$pkg_name' enabled.";
+    return 0;
+}
+function do_clean() {
+    local pkg_name="$1";
+    if [[ -z "$pkg_name" ]]; then usage; return 1; fi;
+    local status;
+    status=$(_get_manifest_row "$pkg_name" | awk -F'\t' '{print $2}');
+    if [[ "$status" != "REMOVED" ]]; then
+        stderr "Error: Package is not in REMOVED state.";
+        return 1;
+    fi;
+
+    if ! _confirm_action "This will permanently delete the manifest entry and workspace files for '$pkg_name'. Continue?"; then
+        stderr "Clean operation aborted by user.";
+        return 1;
+    fi;
+    
+    if ! _purge_package "$pkg_name"; then
+        stderr "Error: Failed to purge package.";
+        return 1;
+    fi;
+
+    stderr "Package '$pkg_name' has been cleaned from the system.";
+    return 0;
+}
+function do_update() {
+    local pkg_name="$1";
+    if [[ -z "$pkg_name" ]]; then usage; return 1; fi;
+
+    stderr "Checking for updates for '$pkg_name'...";
+    if ! _is_update_required "$pkg_name"; then
+        stderr "No changes detected in pristine source. Workspace is up-to-date.";
+        return 0;
+    fi;
+
+    stderr "Update detected in pristine source. Re-registering...";
+    if ! _re_register_package "$pkg_name"; then
+        stderr "Update failed during re-registration.";
+        return 1;
+    fi;
+    
+    stderr "Update complete. Run 'install -f' to deploy the new version.";
+    return 0;
+}
+function do_restore() {
+    local pkg_name="$1";
+    if [[ -z "$pkg_name" ]]; then usage; return 1; fi;
+    local status;
+    status=$(_get_manifest_row "$pkg_name" | awk -F'\t' '{print $2}');
+    if [[ "$status" != "REMOVED" ]]; then
+        stderr "Error: Package is not in REMOVED state.";
+        return 1;
+    fi;
+
+    stderr "Restoring '$pkg_name' from workspace cache...";
+    # Re-use the deploy logic, as it's the same operation.
+    if ! _deploy_package "$pkg_name"; then
+        stderr "Restore failed during deployment.";
+        return 1;
+    fi;
+
+    if ! _update_manifest_status "$pkg_name" "INSTALLED"; then
+        stderr "Warning: Restore successful, but failed to update manifest status.";
+    fi;
+    
+    stderr "Package '$pkg_name' restored.";
+    return 0;
+}
 
 
 # --- CORE FUNCTIONS ---
